@@ -24,7 +24,7 @@ import message_filters
 
 import struct
 
-import body_landmark_detector as bl
+# import body_landmark_detector as bl
 
 import detection_ros_markers as dr
 import detection_2d_to_3d as d2
