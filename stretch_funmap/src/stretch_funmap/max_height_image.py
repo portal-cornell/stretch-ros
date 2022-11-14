@@ -1,6 +1,4 @@
-#!/usr/bin/env python
-
-from __future__ import print_function
+#!/usr/bin/env python3
 
 import sys
 import cv2
@@ -14,8 +12,8 @@ import struct
 import threading
 from collections import deque
 
-import numba_height_image as nh
-from numba_create_plane_image import numba_create_plane_image, numba_correct_height_image, transform_original_to_corrected, transform_corrected_to_original
+import stretch_funmap.numba_height_image as nh
+from stretch_funmap.numba_create_plane_image import numba_create_plane_image, numba_correct_height_image, transform_original_to_corrected, transform_corrected_to_original
 
 from scipy.spatial.transform import Rotation
 
@@ -402,9 +400,8 @@ class MaxHeightImage:
                 'transform_corrected_to_original': transform_corrected_to_original
         }
 
-        fid = open(base_filename + '.yaml', 'w')
-        yaml.dump(data, fid)
-        fid.close()
+        with open(base_filename + '.yaml', 'w') as fid:
+            yaml.dump(data, fid)
 
         print('Finished saving.')
 
@@ -412,9 +409,8 @@ class MaxHeightImage:
     @classmethod
     def load_serialization( self, base_filename ):
         print('MaxHeightImage: Loading serialization data from base_filename =', base_filename)
-        fid = open(base_filename + '.yaml', 'r')
-        data = yaml.load(fid)
-        fid.close()
+        with open(base_filename + '.yaml', 'r') as fid:
+            data = yaml.load(fid, Loader=yaml.FullLoader)
         
         image_filename = data['image_filename']
         fid = gzip.GzipFile(image_filename, 'r')

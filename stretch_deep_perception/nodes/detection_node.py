@@ -87,11 +87,11 @@ class DetectionNode:
         
         debug_output = True
         detections_2d, output_image = self.detector.apply_to_image(detection_box_image, draw_output=debug_output)        
-        if debug_output: 
-            print('DetectionNode.image_callback: processed image with deep network!')
-            print(type(output_image))
-            print('DetectionNode.image_callback: output_image.shape =', output_image.shape)
-            cv2.imwrite('~/output_images/deep_learning_output_' + str(self.image_count).zfill(4) + '.png', output_image)
+        # if debug_output: 
+            # print('DetectionNode.image_callback: processed image with deep network!')
+            # print(type(output_image))
+            # print('DetectionNode.image_callback: output_image.shape =', output_image.shape)
+            # cv2.imwrite('~/output_images/deep_learning_output_' + str(self.image_count).zfill(4) + '.png', output_image)
 
         detections_3d = d2.detections_2d_to_3d(detections_2d, self.rgb_image, self.camera_info, self.depth_image, fit_plane=self.fit_plane, min_box_side_m=self.min_box_side_m, max_box_side_m=self.max_box_side_m)
 

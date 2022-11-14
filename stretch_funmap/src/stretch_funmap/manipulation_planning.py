@@ -1,23 +1,20 @@
-#!/usr/bin/env python
-
-from __future__ import print_function
+#!/usr/bin/env python3
 
 import numpy as np
 import scipy.ndimage as nd
 import scipy.signal as si
 import cv2
-import skimage as sk
 import math
-import max_height_image as mh
-import segment_max_height_image as sm
-import ros_max_height_image as rm
+import stretch_funmap.max_height_image as mh
+import stretch_funmap.segment_max_height_image as sm
+import stretch_funmap.ros_max_height_image as rm
 import hello_helpers.hello_misc as hm
 import ros_numpy as rn
 import rospy
 import os
 
-from numba_manipulation_planning import numba_find_base_poses_that_reach_target, numba_check_that_tool_can_deploy
-from numba_check_line_path import numba_find_contact_along_line_path, numba_find_line_path_on_surface
+from stretch_funmap.numba_manipulation_planning import numba_find_base_poses_that_reach_target, numba_check_that_tool_can_deploy
+from stretch_funmap.numba_check_line_path import numba_find_contact_along_line_path, numba_find_line_path_on_surface
 
 def plan_surface_coverage(tool_start_xy_pix, tool_end_xy_pix, tool_extension_direction_xy_pix, step_size_pix, max_extension_pix, surface_mask_image, obstacle_mask_image):
     # This was designed to be used when planning to clean a flat
@@ -100,7 +97,7 @@ def detect_cliff(image, m_per_pix, m_per_height_unit, robot_xy_pix, display_text
     if use_dilation:
         kernel_width_pix = 3
         iterations = 1
-        kernel_radius_pix = (kernel_width_pix - 1) / 2
+        kernel_radius_pix = (kernel_width_pix - 1) // 2
         kernel = np.zeros((kernel_width_pix, kernel_width_pix), np.uint8)
         cv2.circle(kernel, (kernel_radius_pix, kernel_radius_pix), kernel_radius_pix, 255, -1)
         canny_edges = cv2.dilate(canny_edges, kernel, iterations=iterations)
@@ -247,6 +244,7 @@ class ManipulationView():
         voi.change_frame(points_in_old_frame_to_new_frame_mat, new_frame_id)
         self.voi = voi
         self.max_height_im = rm.ROSMaxHeightImage(self.voi, m_per_pix, pixel_dtype)
+        print(self.max_height_im.voi)
         self.max_height_im.print_info()
         self.updated = False
 
@@ -303,7 +301,7 @@ class ManipulationView():
         if use_dilation:
             kernel_width_pix = 3
             iterations = 1
-            kernel_radius_pix = (kernel_width_pix - 1) / 2
+            kernel_radius_pix = (kernel_width_pix - 1) // 2
             kernel = np.zeros((kernel_width_pix, kernel_width_pix), np.uint8)
             cv2.circle(kernel, (kernel_radius_pix, kernel_radius_pix), kernel_radius_pix, 255, -1)
             mask_image = cv2.dilate(mask_image, kernel, iterations=iterations)
@@ -396,7 +394,7 @@ class ManipulationView():
             
         return grasp_target
 
-    
+
     def get_pregrasp_lift(self, grasp_target, tf2_buffer):
         h = self.max_height_im
         m_per_unit = h.m_per_height_unit
@@ -406,6 +404,8 @@ class ManipulationView():
         # Obtain the tooltip location in the image by obtaining the
         # translational component of the transform, which is the same
         # as multiplying by [0,0,0,1]
+        # print(tooltip_points_to_image_mat)
+        # input()
         tooltip_x, tooltip_y, tooltip_z = tooltip_points_to_image_mat[:, 3][:3]
         tool_current_xy_pix = np.array([tooltip_x, tooltip_y])
 
@@ -423,7 +423,7 @@ class ManipulationView():
         # The planar component of the link gripper x_axis is parallel
         # to the middle of the gripper, but points in the opposite
         # direction.
-        gripper_frame = 'link_gripper'
+        gripper_frame = 'link_straight_gripper_rotated'
         gripper_points_to_image_mat, ip_timestamp = h.get_points_to_image_mat(gripper_frame, tf2_buffer)
         #
         # forward_direction = np.array([1.0, 0.0, 0.0])
@@ -472,7 +472,7 @@ class ManipulationView():
         # The planar component of the link gripper x_axis is parallel
         # to the middle of the gripper, but points in the opposite
         # direction.
-        gripper_frame = 'link_gripper'
+        gripper_frame = 'link_straight_gripper_rotated'
         gripper_points_to_image_mat, ip_timestamp = h.get_points_to_image_mat(gripper_frame, tf2_buffer)
 
         # Obtain the gripper yaw axis location in the image by
@@ -517,7 +517,13 @@ class ManipulationView():
         
         translate_xy_pix = pregrasp_target_xy_pix - yaw_xy_pix
         robot_forward_m = m_per_pix * np.dot(translate_xy_pix, robot_forward_pix)
-        wrist_extension_m = m_per_pix * np.dot(translate_xy_pix, tool_extension_direction_xy_pix)
+        wrist_extension_m = m_per_pix * np.dot(translate_xy_pix, tool_extension_direction_xy_pix) 
+        print("WRIST EXTENSION = ", wrist_extension_m)
+        print('==='*10)
+
+        print("FORWARD EXTENSION = ", robot_forward_m)
+        print('==='*10)
+
 
         debug = True
         if debug and (self.debug_directory is not None): 
@@ -585,9 +591,8 @@ class ManipulationView():
         # The planar component of the link gripper x_axis is parallel
         # to the middle of the gripper, but points in the opposite
         # direction.
-        gripper_frame = 'link_gripper'
+        gripper_frame = 'link_straight_gripper_rotated'
         gripper_points_to_image_mat, ip_timestamp = h.get_points_to_image_mat(gripper_frame, tf2_buffer)
-
         # Obtain the gripper yaw axis location in the image by
         # obtaining the translational component of the transform,
         # which is the same as multiplying by [0,0,0,1]
@@ -623,7 +628,7 @@ class ManipulationView():
 
         # target distance from yaw joint axis to the object grasp
         # location
-        grasp_target_dist_m = 0.21
+        grasp_target_dist_m = 0.15
         grasp_target_dist_pix = grasp_target_dist_m / m_per_pix
         grasp_target_xy_pix = (grasp_target_dist_pix * gripper_forward_pix) + grasp_target['location_xy_pix']
         

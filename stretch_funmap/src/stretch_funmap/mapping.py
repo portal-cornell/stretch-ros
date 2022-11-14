@@ -1,23 +1,22 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-from __future__ import print_function
 import numpy as np
 import ros_numpy as rn
-import ros_max_height_image as rm
+import stretch_funmap.ros_max_height_image as rm
 from actionlib_msgs.msg import GoalStatus
 import rospy
 import hello_helpers.hello_misc as hm
-import ros_max_height_image as rm
+import stretch_funmap.ros_max_height_image as rm
 import ros_numpy
 import yaml
-import navigation_planning as na
+import stretch_funmap.navigation_planning as na
 import time
 import cv2
 import copy
 import scipy.ndimage as nd
-import merge_maps as mm
+import stretch_funmap.merge_maps as mm
 import tf_conversions
-import segment_max_height_image as sm
+import stretch_funmap.segment_max_height_image as sm
 
 
 def stow_and_lower_arm(node):
@@ -86,8 +85,8 @@ def display_head_scan(title, head_scan, scale_divisor=None, robot_xya_pix_list=N
         cv2.imshow(title, color_im)
     else:
         # scale the map so that it can be viewed on a small monitor
-        nh = h/scale_divisor
-        nw = w/scale_divisor
+        nh = h//scale_divisor
+        nw = w//scale_divisor
         color_im = cv2.resize(color_im, (nw, nh))
         cv2.imshow(title, color_im)
 
@@ -120,8 +119,8 @@ def localize_with_reduced_images(head_scan, merged_map, global_localization=True
 
     h, w = mhi_0.image.shape
     
-    nh = h/divisor
-    nw = w/divisor
+    nh = h//divisor
+    nw = w//divisor
 
     mhi_0.image = cv2.resize(mhi_0.image, (nw, nh))
     mhi_0.camera_depth_image = cv2.resize(mhi_0.camera_depth_image, (nw, nh))
@@ -473,18 +472,16 @@ class HeadScan:
                 'map_to_image_mat' : self.map_to_image_mat.tolist(), 
                 'map_to_base_mat' : self.map_to_base_mat.tolist()}
         
-        fid = open(base_filename + '.yaml', 'w')
-        yaml.dump(data, fid)
-        fid.close()
+        with open(base_filename + '.yaml', 'w') as fid:
+            yaml.dump(data, fid)
         print('Finished saving.')
 
         
     @classmethod
     def from_file(self, base_filename):
         print('HeadScan.from_file: base_filename =', base_filename)
-        fid = open(base_filename + '.yaml', 'r')
-        data = yaml.load(fid)
-        fid.close()
+        with open(base_filename + '.yaml', 'r') as fid:
+            data = yaml.load(fid, Loader=yaml.FullLoader)
 
         print('data =', data)
         max_height_image_base_filename = data['max_height_image_base_filename']

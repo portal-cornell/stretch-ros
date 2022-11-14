@@ -1,15 +1,16 @@
-#!/usr/bin/env python
-from __future__ import print_function
+#!/usr/bin/env python3
 
 import math
 import keyboard as kb
 import argparse as ap
 
 import rospy
+from std_msgs.msg import String
 from std_srvs.srv import Trigger, TriggerRequest
 from sensor_msgs.msg import JointState
 from control_msgs.msg import FollowJointTrajectoryGoal
 from trajectory_msgs.msg import JointTrajectoryPoint
+from custom_msg_python.msg import Keypressed
 
 import hello_helpers.hello_misc as hm
 
@@ -19,16 +20,12 @@ class GetKeyboardCommands:
     def __init__(self, mapping_on, hello_world_on, open_drawer_on, clean_surface_on, grasp_object_on, deliver_object_on):
         self.mapping_on = mapping_on
         self.hello_world_on = hello_world_on
-        self.open_drawer_on = open_drawer_on
+        self.open_drawer_on = True
         self.clean_surface_on = clean_surface_on
         self.grasp_object_on = grasp_object_on
         self.deliver_object_on = deliver_object_on
 
         self.step_size = 'medium'
-        # self.persistent_command_count = 0
-        # self.prev_persistent_c = None
-        # self.persistent_start_s = time.time()
-        # self.max_persistent_delay_s = 1.0
         self.rad_per_deg = math.pi/180.0
         self.small_deg = 3.0
         self.small_rad = self.rad_per_deg * self.small_deg
@@ -92,9 +89,9 @@ class GetKeyboardCommands:
             print('                                           ')
             print('                                           ')
         if in_joints(['joint_wrist_pitch']):
-            print(' c PITCH FORWARD        v PITCH BACK       ')
+            print(' c GRIPPER UP        v GRIPPER DOWN       ')
         if in_joints(['joint_wrist_roll']):
-            print(' o ROLL FORWARD         p ROLL BACK        ')
+            print(' o ROLL LEFT         p ROLL RIGHT       ')
         print('                                           ')
         print('                                           ')
         if in_joints(['joint_gripper_finger_left', 'joint_gripper_finger_right', 'gripper_aperture']):
@@ -220,74 +217,130 @@ class GetKeyboardCommands:
         ## BASIC KEYBOARD TELEOPERATION COMMANDS
         ####################################################
         
+        keypressed_publisher = rospy.Publisher('key_pressed', Keypressed, queue_size=20)
+        rospy.Rate(1)
+        msg = Keypressed()
+        msg.timestamp = (str) (rospy.get_rostime().to_nsec())
         # 8 or up arrow
         if c == '8' or c == '\x1b[A':
             command = {'joint': 'joint_lift', 'delta': self.get_deltas()['translate']}
+            msg.keypressed = '8'
+            keypressed_publisher.publish(msg)
         # 2 or down arrow
         if c == '2' or c == '\x1b[B':
             command = {'joint': 'joint_lift', 'delta': -self.get_deltas()['translate']}
+            msg.keypressed = '2'
+            keypressed_publisher.publish(msg)
         if self.mode == 'manipulation':
             # 4 or left arrow
             if c == '4' or c == '\x1b[D':
                 command = {'joint': 'joint_mobile_base_translation', 'delta': self.get_deltas()['translate']}
+                msg.keypressed = '4'
+                keypressed_publisher.publish(msg)
             # 6 or right arrow
             if c == '6' or c == '\x1b[C':
                 command = {'joint': 'joint_mobile_base_translation', 'delta': -self.get_deltas()['translate']}
+                msg.keypressed = '6'
+                keypressed_publisher.publish(msg)
         elif self.mode == 'position':
             # 4 or left arrow
             if c == '4' or c == '\x1b[D':
                 command = {'joint': 'translate_mobile_base', 'inc': self.get_deltas()['translate']}
+                msg.keypressed = '4'
+                keypressed_publisher.publish(msg)
             # 6 or right arrow
             if c == '6' or c == '\x1b[C':
                 command = {'joint': 'translate_mobile_base', 'inc': -self.get_deltas()['translate']}
+                msg.keypressed = '6'
+                keypressed_publisher.publish(msg)
             # 1 or end key 
             if c == '7' or c == '\x1b[H':
                 command = {'joint': 'rotate_mobile_base', 'inc': self.get_deltas()['rad']}
+                msg.keypressed = '7'
+                keypressed_publisher.publish(msg)
             # 3 or pg down 5~
             if c == '9' or c == '\x1b[5':
                 command = {'joint': 'rotate_mobile_base', 'inc': -self.get_deltas()['rad']}
+                msg.keypressed = '9'
+                keypressed_publisher.publish(msg)
         elif self.mode == 'navigation':
             rospy.loginfo('ERROR: Navigation mode is not currently supported.')
 
         if c == 'w' or c == 'W':
             command = {'joint': 'wrist_extension', 'delta': self.get_deltas()['translate']}
+            msg.keypressed = 'w'
+            keypressed_publisher.publish(msg)
         if c == 'x' or c == 'X':
             command = {'joint': 'wrist_extension', 'delta': -self.get_deltas()['translate']}
+            msg.keypressed = 'x'
+            keypressed_publisher.publish(msg)
         if c == 'd' or c == 'D':
             command = {'joint': 'joint_wrist_yaw', 'delta': -self.get_deltas()['rad']}
+            msg.keypressed = 'd'
+            keypressed_publisher.publish(msg)
         if c == 'a' or c == 'A':
             command = {'joint': 'joint_wrist_yaw', 'delta': self.get_deltas()['rad']}
+            msg.keypressed = 'a'
+            keypressed_publisher.publish(msg)
         if c == 'v' or c == 'V':
             command = {'joint': 'joint_wrist_pitch', 'delta': -self.get_deltas()['rad']}
+            msg.keypressed = 'v'
+            keypressed_publisher.publish(msg)
         if c == 'c' or c == 'C':
             command = {'joint': 'joint_wrist_pitch', 'delta': self.get_deltas()['rad']}
+            msg.keypressed = 'c'
+            keypressed_publisher.publish(msg)
         if c == 'p' or c == 'P':
             command = {'joint': 'joint_wrist_roll', 'delta': -self.get_deltas()['rad']}
+            msg.keypressed = 'p'
+            keypressed_publisher.publish(msg)
         if c == 'o' or c == 'O':
             command = {'joint': 'joint_wrist_roll', 'delta': self.get_deltas()['rad']}
+            msg.keypressed = 'o'
+            keypressed_publisher.publish(msg)
         if c == '5' or c == '\x1b[E' or c == 'g' or c == 'G':
             # grasp
             command = {'joint': 'joint_gripper_finger_left', 'delta': -self.get_deltas()['rad']}
+            msg.keypressed = '5'
+            keypressed_publisher.publish(msg)
         if c == '0' or c == '\x1b[2' or c == 'r' or c == 'R':
             # release
             command = {'joint': 'joint_gripper_finger_left', 'delta': self.get_deltas()['rad']}
+            msg.keypressed = '0'
+            keypressed_publisher.publish(msg)
         if c == 'i' or c == 'I':
+            # head up
             command = {'joint': 'joint_head_tilt', 'delta': (2.0 * self.get_deltas()['rad'])}
+            msg.keypressed = 'i'
+            keypressed_publisher.publish(msg)
         if c == ',' or c == '<':
+            # head down 
             command = {'joint': 'joint_head_tilt', 'delta': -(2.0 * self.get_deltas()['rad'])}
+            msg.keypressed = ','
+            keypressed_publisher.publish(msg)
         if c == 'j' or c == 'J':
             command = {'joint': 'joint_head_pan', 'delta': (2.0 * self.get_deltas()['rad'])}
+            msg.keypressed = 'j'
+            keypressed_publisher.publish(msg)
         if c == 'l' or c == 'L':
             command = {'joint': 'joint_head_pan', 'delta': -(2.0 * self.get_deltas()['rad'])}
+            msg.keypressed = 'l'
+            keypressed_publisher.publish(msg)
         if c == 'b' or c == 'B':
             rospy.loginfo('process_keyboard.py: changing to BIG step size')
             self.step_size = 'big'
+            msg.keypressed = 'b'
+            keypressed_publisher.publish(msg)
         if c == 'm' or c == 'M':
             rospy.loginfo('process_keyboard.py: changing to MEDIUM step size')
             self.step_size = 'medium'
+            msg.keypressed = 'm'
+            keypressed_publisher.publish(msg)
         if c == 's' or c == 'S':
             rospy.loginfo('process_keyboard.py: changing to SMALL step size')
             self.step_size = 'small'
+            msg.keypressed = 's'
+            keypressed_publisher.publish(msg)
         if c == 'q' or c == 'Q':
             rospy.loginfo('keyboard_teleop exiting...')
             rospy.signal_shutdown('Received quit character (q), so exiting')

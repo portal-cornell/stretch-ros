@@ -1,6 +1,4 @@
-#!/usr/bin/env python
-
-from __future__ import print_function
+#!/usr/bin/env python3
 
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import Twist
@@ -121,8 +119,16 @@ class GraspObjectNode(hm.HelloNode):
         self.look_at_surface(scan_time_s = 3.0)
         
         grasp_target = self.manipulation_view.get_grasp_target(self.tf2_buffer)
-        
+        if grasp_target is None:
+            return TriggerResponse(
+                success=False,
+                message='Failed to find grasp target'
+            )
+        print("Grasp target")
+        # print(grasp_target)
+        input()
         if grasp_target is not None: 
+            print(self.tf2_buffer)
             pregrasp_lift_m = self.manipulation_view.get_pregrasp_lift(grasp_target, self.tf2_buffer)
 
             if (self.lift_position is None):
@@ -137,7 +143,8 @@ class GraspObjectNode(hm.HelloNode):
                 lift_to_pregrasp_m = min(lift_to_pregrasp_m, max_lift_m)
                 pose = {'joint_lift': lift_to_pregrasp_m}
                 self.move_to_pose(pose)
-
+            print('Raise tool to pregrasp height.'+'='*50)
+            input()
             pregrasp_yaw = self.manipulation_view.get_pregrasp_yaw(grasp_target, self.tf2_buffer)
             print('pregrasp_yaw = {0:.2f} rad'.format(pregrasp_yaw))
             print('pregrasp_yaw = {0:.2f} deg'.format(pregrasp_yaw * (180.0/np.pi)))
@@ -150,6 +157,9 @@ class GraspObjectNode(hm.HelloNode):
                 rospy.loginfo('Open the gripper.')
                 pose = {'gripper_aperture': 0.125}
                 self.move_to_pose(pose)
+
+            print('Rotate gripper for grasping.'+'='*20)
+            input()
 
             pregrasp_mobile_base_m, pregrasp_wrist_extension_m = self.manipulation_view.get_pregrasp_planar_translation(grasp_target, self.tf2_buffer)
             
@@ -169,7 +179,15 @@ class GraspObjectNode(hm.HelloNode):
                 else:
                     print('negative wrist extension for pregrasp, so not extending or retracting.')
 
+            print('Drive to pregrasp location.'+'='*20)
+            input()
+            # return TriggerResponse(
+            #     success=False,
+            #     message='Failed to find grasp target'
+            # )
+
             grasp_mobile_base_m, grasp_lift_m, grasp_wrist_extension_m = self.manipulation_view.get_grasp_from_pregrasp(grasp_target, self.tf2_buffer)
+            print('='*20)
             print('grasp_mobile_base_m = {0:3f} m, grasp_lift_m = {1:3f} m, grasp_wrist_extension_m = {2:3f} m'.format(grasp_mobile_base_m, grasp_lift_m, grasp_wrist_extension_m))
 
             if actually_move: 
@@ -209,7 +227,11 @@ class GraspObjectNode(hm.HelloNode):
                 pose = {'gripper_aperture': gripper_aperture_m + 0.005}
                 self.move_to_pose(pose)
 
+            
 
+            print('Attempt to move to grasp pose and close the gripper on the object.'+'='*20)
+            input()
+            
             if actually_move:
                 rospy.loginfo('Retract the tool.')
                 pose = {'wrist_extension': 0.01}
