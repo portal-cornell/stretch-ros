@@ -30,9 +30,9 @@ def numba_image_to_pointcloud(depth_image, bounding_box, camera_matrix):
     # lambda function: given points index i, return [x,y,z]
     def helper(l):
         i = l[0]
-        x = (i // out_h) + x_min
-        y = (i % out_w) + y_min
-        z_3d = depth_image[x, y]
+        y = (i // out_h) + x_min
+        x = (i % out_w) + y_min
+        z_3d = depth_image[y, x]
         x_3d = ((x - c_x) / f_x) * z_3d
         y_3d = ((y - c_y) / f_y) * z_3d
         return [x_3d, y_3d, z_3d]
