@@ -1,6 +1,7 @@
 from numba import jit, njit
 import numpy as np
 
+
 @njit(fastmath=True)
 def numba_image_to_pointcloud(depth_image, bounding_box, camera_matrix):
     x_min, y_min, x_max, y_max = bounding_box
@@ -15,11 +16,11 @@ def numba_image_to_pointcloud(depth_image, bounding_box, camera_matrix):
         x_max = x_min
     if y_max < y_min:
         y_max = y_min
-        
-    f_x = camera_matrix[0,0]
-    c_x = camera_matrix[0,2]
-    f_y = camera_matrix[1,1]
-    c_y = camera_matrix[1,2]
+
+    f_x = camera_matrix[0, 0]
+    c_x = camera_matrix[0, 2]
+    f_y = camera_matrix[1, 1]
+    c_y = camera_matrix[1, 2]
 
     out_w = (x_max - x_min) + 1
     out_h = (y_max - y_min) + 1

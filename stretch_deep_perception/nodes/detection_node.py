@@ -100,7 +100,7 @@ class DetectionNode:
             # cv2.imwrite('~/output_images/deep_learning_output_' + str(self.image_count).zfill(4) + '.png', output_image)
 
         # print(detections_2d)
-        pdb.set_trace()
+        # pdb.set_trace()
         detections_3d = d2.detections_2d_to_3d(detections_2d, self.rgb_image, self.camera_info, self.depth_image, fit_plane=self.fit_plane, min_box_side_m=self.min_box_side_m, max_box_side_m=self.max_box_side_m)
 
         if self.modify_3d_detections is not None:
