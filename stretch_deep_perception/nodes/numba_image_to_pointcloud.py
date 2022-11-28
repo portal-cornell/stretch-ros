@@ -34,6 +34,8 @@ def numba_image_to_pointcloud(depth_image, bounding_box, camera_matrix):
             x_3d = ((x - c_x) / f_x) * z_3d
             y_3d = ((y - c_y) / f_y) * z_3d
             points[i] = (x_3d, y_3d, z_3d)
+            if(x == x_min and y == y_min):
+                print(x_3d, y_3d, z_3d)
             i += 1
             y += 1
         x += 1

@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 
 import cv2
-import torch
 import sys
 import rospy
 import object_detector_python3 as od
-import detection_node_python3 as dn
+import detection_node as dn
 import deep_learning_model_options as do
         
 if __name__ == '__main__':    
     print('cv2.__version__ =', cv2.__version__)
     print('Python version (must be > 3.0):', sys.version)
     assert(int(sys.version[0]) >= 3)
-
-    test = torch.tensor([1.0, 2.0])
 
     
     models_directory = do.get_directory()
