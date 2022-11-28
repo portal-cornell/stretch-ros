@@ -43,7 +43,7 @@ if __name__ == '__main__':
         roslaunch stretch_navigation navigation.launch map_yaml:=${HELLO_FLEET_PATH}/maps/mapping_eod_11_14.yaml
 
     2. Then run:
-        python3 /home/strech/catkin_ws/src/stretch_ros/stretch_navigation/nodes/task_planner.py
+        python3 /home/strech/catkin_ws/src/stretch_ros/stretch_demos/nodes/eos_demo_2022_planner.py
 
     3. to get a better point based on rviz: rostopic echo /clicked_point
     """
@@ -56,12 +56,10 @@ if __name__ == '__main__':
     # Declare a `StretchNavigation` object
     nav = StretchNavigation()
     
-    nav.go_to(TABLE, planner.done_callback("went_to_table"))  # go roughly to the table
+    nav.go_to(HOME, planner.done_callback("went_to_table"))  # go roughly to the table
 
-    while not planner.status["went_to_table"]:
-        print("========================================================")
-        print("       Waiting for Stretch to go to the table")
-        print("========================================================")
-
-    print("DONE")
-    input("stop")
+    # Don't need this. Go to already makes planner sleep
+    # while not planner.all_status["went_to_table"]:
+    #     print("========================================================")
+    #     print("       Waiting for Stretch to go to the table")
+    #     print("========================================================")
