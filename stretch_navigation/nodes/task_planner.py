@@ -106,5 +106,5 @@ if __name__ == '__main__':
         roslaunch stretch_navigation navigation.launch map_yaml:=${HELLO_FLEET_PATH}/maps/mapping_eod_11_14.yaml
 
     2. Then run:
-        python3 /home/strech/catkin_ws/src/stretch_ros/stretch_navigation/task_planner.py
+        python3 /home/strech/catkin_ws/src/stretch_ros/stretch_navigation/nodes/task_planner.py
     """
