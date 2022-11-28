@@ -18,6 +18,9 @@
   <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_yaml)" />
 
   <!-- LOCALIZATION -->
+  <param name="/amcl/initial_pose_x" type="double" value="-1.85"/>
+  <param name="/amcl/initial_pose_y" type="double" value="2.77"/>
+  <param name="/amcl/initial_pose_a" type="double" value="-0.85"/>
   <include file="$(find amcl)/examples/amcl_diff.launch" />
 
   <!-- NAVIGATION -->
