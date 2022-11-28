@@ -7,7 +7,7 @@
   <!-- -->
     
   <!-- KEYBOARD TELEOP -->
-  <node name="keyboard_teleop" pkg="stretch_core" type="keyboard_teleop" output="screen" args=''/>
+  <node name="keyboard_teleop" pkg="stretch_core" type="keyboard_teleop" output="screen" args='--mapping_on'/>
   <!-- -->
     
 </launch>
