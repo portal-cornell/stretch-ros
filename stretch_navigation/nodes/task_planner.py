@@ -96,4 +96,5 @@ if __name__ == '__main__':
     nav = StretchNavigation()
 
     # Send a nav goal to the `go_to()` method
-    nav.go_to(-1.0, -1.0, 0.0)
+    # nav.go_to(-1.85, 2.77, -0.85)  # go back to the base
+    nav.go_to(-0.397, 0.024, -0.85)  # go roughly to the table
