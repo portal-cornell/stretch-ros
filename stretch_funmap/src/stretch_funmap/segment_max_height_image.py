@@ -946,6 +946,45 @@ def draw_ellipse_axes_from_region(image, region_properties, color=[255, 255, 255
     cv2.line(image, tuple(minor_axis[0]), tuple(minor_axis[1]), color, 1)
     cv2.line(image, tuple(major_axis[0]), tuple(major_axis[1]), color, 1)
     
+def get_center(pc):
+    """
+    Finds the center of a point cloud by filtering out a percentage of the extremes 
+    along x, y, z and then calculating the mean independently.
+    Returns: np.array([center_x, center_y, center_z])
+    """
+    # flatten the point cloud
+    img_size, _ = pc.shape
+    
+    # extract x, y, z values
+    x_values = pc[:, 0]
+    y_values = pc[:, 1]
+    z_values = pc[:, 2]
+
+    # get filtering percentage
+    filter_num = img_size // 10
+
+    # get the value of the bottom filtering percentage
+    x_min = x_values[np.argsort(x_values)[filter_num]]
+    y_min = y_values[np.argsort(y_values)[filter_num]]
+    z_min = z_values[np.argsort(z_values)[filter_num]]
+
+    # get the value of the top filtering percentage
+    x_max = x_values[np.argsort(x_values)[-filter_num]]
+    y_max = y_values[np.argsort(y_values)[-filter_num]]
+    z_max = z_values[np.argsort(z_values)[-filter_num]]
+
+    # filter out the bottom and top filtering percentage
+    filter_x = x_values[x_values>=x_min]
+    filter_y = y_values[y_values>=y_min]
+    filter_z = z_values[z_values>=z_min]
+
+    pc_x = filter_x[filter_x<x_max]
+    pc_y = filter_y[filter_y<y_max]
+    pc_z = filter_z[filter_z<z_max]
+
+    # find the center of the filtered point cloud
+    center = np.array([np.mean(pc_x), np.mean(pc_y), np.mean(pc_z)])
+    return center
 
 def draw_text(image, text, x, y): 
     font = cv2.FONT_HERSHEY_PLAIN
