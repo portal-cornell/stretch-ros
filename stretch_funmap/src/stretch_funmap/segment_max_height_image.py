@@ -34,8 +34,11 @@ def find_object_to_grasp(height_image, display_on=False):
     h_image = height_image.image
     if display_on: 
         cv2.imshow('corrected height image', h_image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
         cv2.imshow('rgb image', height_image.rgb_image)
-
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
     if display_on: 
         rgb_image = height_image.rgb_image.copy()
         rgb_image[surface_mask > 0] = (rgb_image[surface_mask > 0]/2) + [0, 127, 0] 
@@ -64,7 +67,8 @@ def find_object_to_grasp(height_image, display_on=False):
         rgb_image[surface_mask > 0] = (rgb_image[surface_mask > 0]//2) + [0, 127, 0] 
         rgb_image[obstacle_selector] = (rgb_image[obstacle_selector]//2) + [0, 0, 127] 
         cv2.imshow('obstacles', rgb_image)
-
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
     obstacle_mask = np.uint8(obstacle_selector)
 
     if display_on: 
@@ -84,17 +88,18 @@ def find_object_to_grasp(height_image, display_on=False):
     # Dilate and erode the candidate object points to agglomerate
     # object parts that might be separated due to occlusion, noise,
     # and other phenomena.
-    kernel_width_pix = 5 #3
-    iterations = 3 #5
+    kernel_width_pix = 3 #3
+    dilation_iterations = 15#5
+    erosion_iterations = 12
     kernel_radius_pix = (kernel_width_pix - 1) // 2
     kernel = np.zeros((kernel_width_pix, kernel_width_pix), np.uint8)
     cv2.circle(kernel, (kernel_radius_pix, kernel_radius_pix), kernel_radius_pix, 255, -1)
     use_dilation = True
     if use_dilation:
-        obstacles_on_surface = cv2.dilate(obstacles_on_surface, kernel, iterations=iterations)
+        obstacles_on_surface = cv2.dilate(obstacles_on_surface, kernel, iterations=dilation_iterations)
     use_erosion = True
     if use_erosion:
-        obstacles_on_surface = cv2.erode(obstacles_on_surface, kernel, iterations=iterations)
+        obstacles_on_surface = cv2.erode(obstacles_on_surface, kernel, iterations=erosion_iterations)
 
     #####################################
     # Process the candidate object points      
@@ -106,7 +111,8 @@ def find_object_to_grasp(height_image, display_on=False):
         rgb_image = height_image.rgb_image.copy()
         color_label_image = sk.color.label2rgb(label_image, image=rgb_image, colors=None, alpha=0.3, bg_label=0, bg_color=(0, 0, 0), image_alpha=1, kind='overlay')
         cv2.imshow('color_label_image', color_label_image)
-
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
     # Proceed if an object was found.
     if len(region_properties) > 0:
 
@@ -149,7 +155,8 @@ def find_object_to_grasp(height_image, display_on=False):
             rgb_image[label_image == object_region.label] = [0, 0, 255]
             draw_ellipse_axes_from_region(rgb_image, largest_region, color=[255, 255, 255])
             cv2.imshow('object to grasp', rgb_image)
-
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
         # ellipse = {'centroid': centroid,
         #            'minor': {'axis': minor_axis, 'length': r.minor_axis_length},
         #            'major': {'axis': major_axis, 'length': r.major_axis_length, 'ang_rad': major_ang_rad}}
@@ -387,9 +394,12 @@ def find_closest_flat_surface(height_image, robot_xy_pix, display_on=False):
             cv2.imshow(visualize_title + 'color_label_image', color_label_image)
             cv2.imshow(visualize_title + 'surface_label_image_rgb', surface_label_image_rgb)
             cv2.imshow(visualize_title + 'best_surface_image_rgb', best_surface_image_rgb)
-
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
     if display_on: 
         cv2.imshow('depth image with detected line', color_im)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     plane_mask = best_surface
     plane_parameters = a
@@ -472,7 +482,8 @@ def visualize_hist(value_hist, segments_image, height_to_segment_id, bins_to_mar
         height_to_segment_id_image = draw_histogram(height_to_segment_id, hist_image_w, hist_image_h, border=20, bins_to_mark=bins_to_mark)
         temp = height_to_segment_id_image/2 + hist_image/2
         cv2.imshow('height to segment id', temp)
-    cv2.waitKey(100)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 
 def histogram_segment(segments_image, image,
@@ -1013,7 +1024,8 @@ def full_segment(image, image_rgb, segmentation_scale, m_per_unit, zero_height=0
         if key_image is not None: 
             cv2.imshow(visualize_title + 'segmented image key', key_image)
             cv2.imshow(visualize_title + 'segmented image', segments_color_image)
-            
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
     return region_properties, label_image, max_label_index, color_label_image
 
 
@@ -1143,6 +1155,8 @@ def process_max_height_image(max_height_im, robot_x_pix, robot_y_pix, robot_ang_
 
         if display_on: 
             cv2.imshow('floor mask before drawing robot footprint', floor_mask)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
         distance_map, traversable_mask = na.distance_map_simple( floor_mask, m_per_pix, min_robot_width_m, robot_x_pix, robot_y_pix, robot_ang_rad, display_on=display_on, verbose=True )
 
@@ -1153,6 +1167,7 @@ def process_max_height_image(max_height_im, robot_x_pix, robot_y_pix, robot_ang_
             cv2.imshow(visualize_title + 'segmented image key', key_image)
             cv2.imshow(visualize_title + 'segmented image', segments_color_image)
     if display_on: 
-        cv2.waitKey(1000)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     return distance_map, traversable_mask

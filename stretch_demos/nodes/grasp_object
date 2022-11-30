@@ -118,7 +118,11 @@ class GraspObjectNode(hm.HelloNode):
             
         self.look_at_surface(scan_time_s = 3.0)
         
-        grasp_target = self.manipulation_view.get_grasp_target(self.tf2_buffer)
+        # grasp_target = self.manipulation_view.get_grasp_target(self.tf2_buffer)
+        import pickle
+        f = open('/home/strech/stretch_user/debug/grasp_target.pkl', 'rb')
+        grasp_target = pickle.load(f)
+
         if grasp_target is None:
             return TriggerResponse(
                 success=False,
@@ -126,8 +130,12 @@ class GraspObjectNode(hm.HelloNode):
             )
         print("Grasp target")
         # print(grasp_target)
-        input()
+        # input()
         if grasp_target is not None: 
+            # import pickle
+            # f = open('/home/strech/stretch_user/debug/grasp_target.pkl', 'wb')
+            # pickle.dump(grasp_target, f)
+            # f.close()
             print(self.tf2_buffer)
             pregrasp_lift_m = self.manipulation_view.get_pregrasp_lift(grasp_target, self.tf2_buffer)
 
@@ -144,7 +152,7 @@ class GraspObjectNode(hm.HelloNode):
                 pose = {'joint_lift': lift_to_pregrasp_m}
                 self.move_to_pose(pose)
             print('Raise tool to pregrasp height.'+'='*50)
-            input()
+            # input()
             pregrasp_yaw = self.manipulation_view.get_pregrasp_yaw(grasp_target, self.tf2_buffer)
             print('pregrasp_yaw = {0:.2f} rad'.format(pregrasp_yaw))
             print('pregrasp_yaw = {0:.2f} deg'.format(pregrasp_yaw * (180.0/np.pi)))

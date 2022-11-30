@@ -365,7 +365,7 @@ class ManipulationView():
         return reach_m
 
     def get_grasp_target(self, tf2_buffer, max_object_planar_distance_m=1.0):
-        grasp_target = sm.find_object_to_grasp(self.max_height_im, display_on=False)
+        grasp_target = sm.find_object_to_grasp(self.max_height_im, display_on=True)
         if grasp_target is None:
             return None
         
@@ -384,6 +384,7 @@ class ManipulationView():
             if not os.path.exists(dirname):
                 os.makedirs(dirname)
             cv2.imwrite(dirname + filename, rgb_image)
+            cv2.imwrite(dirname + filename.replace('grasp', 'mhi'), h.image.copy())
         base_points_to_image_mat, ip_timestamp = h.get_points_to_image_mat('base_link', tf2_buffer)
         base_xy_pix = base_points_to_image_mat[:, 3][:2]
         grasp_xy_pix = grasp_target['location_xy_pix']
