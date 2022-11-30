@@ -21,6 +21,8 @@ HOME = (-1.85, 2.77, -0.85)
 
 TABLE = (-0.397, 0.024, -0.85)
 
+MOVE_WITH_CART_POSE = (-0.397, 0.024, 0.5)
+
 class DemoPlanner:
     def __init__(self):
         self.all_status = {"went_to_table": False, "went_back_home": False}
@@ -73,18 +75,20 @@ if __name__ == '__main__':
     #     print("       Waiting for Stretch to go to the table")
     #     print("========================================================")
 
-    
+    input("Waiting to get into the pose to move with cart")
 
-    input("Waiting to get repositioned")
+    nav.go_to(MOVE_WITH_CART_POSE, planner.done_callback("went_to_table"))
 
-    base_motion = Move()
+    input("Waiting to get arm adjusted")
 
-    while planner.pos.x > -1.9:
-        print("Moving stretch backward")
-        base_motion.move_x(speed=-0.3)
+    # base_motion = Move()
 
-    print("Completed")
+    # while planner.pos.x > -0.74 and planner.pos.y > -0.1:
+    #     print("Moving stretch backward")
+    #     base_motion.move_x(speed=-0.1)
+
+    # print("Completed")
 
     # input("Got to target position")
 
-    # nav.go_to(HOME, planner.done_callback("went_back_home"))  # go roughly to the table
+    nav.go_to(HOME, planner.done_callback("went_back_home"))  # go roughly to the table
