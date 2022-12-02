@@ -943,8 +943,8 @@ def get_ellipse_pc(point_cloud):
     pc = point_cloud
     centriod = get_center(pc)
     filtered_pc = filter_pc(pc)
-    minor_axis_length = 2.0
-    major_axis_length = 4.0
+    minor_axis_length = 7.0
+    major_axis_length = 12.16
     major_vector = tm.points.major_axis(filtered_pc)
 
     # find angle in radians with the x-axis
