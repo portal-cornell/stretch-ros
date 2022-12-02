@@ -4,6 +4,7 @@
 import rospy
 import actionlib
 import sys
+import time
 
 # We need the MoveBaseAction and MoveBaseGoal from the move_base_msgs package.
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
@@ -16,14 +17,20 @@ from tf import transformations
 
 from basic_navigation import StretchNavigation
 from basic_move import Move
+from basic_joint_mover import JointMover
 
 HOME = (-1.85, 2.77, -0.85)
 
 TABLE = (-0.397, 0.024, -0.85)
 
+MOVE_WITH_CART_POSE = (-0.397, 0.024, 0.5)
+
 class DemoPlanner:
     def __init__(self):
-        self.all_status = {"went_to_table": False, "went_back_home": False}
+        self.all_status = {"went_to_table": False, 
+                            "pos_ready_for_cart": False,
+                            "went_back_home": False,
+                            }
 
         self.amcl_listener = rospy.Subscriber('/amcl_pose', PoseWithCovarianceStamped, self.get_position_in_map)
 
@@ -35,15 +42,15 @@ class DemoPlanner:
 
     def done_callback(self, curr_action):
         def callback(status, result):
+            self.all_status[curr_action] = True
             if status == actionlib.GoalStatus.SUCCEEDED:
-                rospy.loginfo('{0}: SUCCEEDED in reaching the goal.'.format(self.__class__.__name__))
-                self.all_status[curr_action] = True
+                rospy.loginfo('{0}: SUCCEEDED in reaching the goal.'.format(curr_action))
             else:
-                rospy.loginfo('{0}: FAILED in reaching the goal.'.format(self.__class__.__name__))    
+                rospy.loginfo('{0}: FAILED in reaching the goal.'.format(curr_action))    
 
         return callback    
 
-
+    
 if __name__ == '__main__':
     """
     TO RUN:
@@ -64,27 +71,27 @@ if __name__ == '__main__':
 
     # Declare a `StretchNavigation` object
     nav = StretchNavigation()
+
+    joint_mover = JointMover()
+
+    """RESET ARM ONLY"""
+    # joint_mover.reset_arm()
+    """RESET ARM ONLY"""
     
     nav.go_to(TABLE, planner.done_callback("went_to_table"))  # go roughly to the table
 
-    # Don't need this. Go to already makes planner sleep
-    # while not planner.all_status["went_to_table"]:
-    #     print("========================================================")
-    #     print("       Waiting for Stretch to go to the table")
-    #     print("========================================================")
-
+    nav.go_to(MOVE_WITH_CART_POSE, planner.done_callback("pos_ready_for_cart"))
     
+    joint_mover.lift_arm_before_extend()
 
-    input("Waiting to get repositioned")
+    time.sleep(3)
 
-    base_motion = Move()
+    joint_mover.extend_arm_before_latching_cart()
 
-    while planner.pos.x > -1.9:
-        print("Moving stretch backward")
-        base_motion.move_x(speed=-0.3)
+    time.sleep(2.5)
 
-    print("Completed")
+    joint_mover.lower_arm_to_cart()
 
-    # input("Got to target position")
+    time.sleep(2)
 
-    # nav.go_to(HOME, planner.done_callback("went_back_home"))  # go roughly to the table
+    nav.go_to(HOME, planner.done_callback("went_back_home"))  # go roughly to the table

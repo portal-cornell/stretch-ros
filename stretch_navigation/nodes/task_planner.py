@@ -109,4 +109,3 @@ if __name__ == '__main__':
         python3 /home/strech/catkin_ws/src/stretch_ros/stretch_navigation/nodes/task_planner.py
 
     3. to get a better point based on rviz: rostopic echo /clicked_point
-    """
