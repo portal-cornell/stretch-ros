@@ -1,0 +1,16 @@
+<launch>
+  <arg name="debug_directory" value="$(env HELLO_FLEET_PATH)/debug/"/>
+
+  <!-- MAPPING -->
+  <node name="funmap" pkg="stretch_funmap" type="funmap" output="screen" >
+    <param name="debug_directory" type="string" value="$(arg debug_directory)"/>
+  </node>
+  <!-- -->
+
+  <!-- GRASP OBJECT -->
+  <node name="grasp_object" pkg="stretch_demos" type="grasp_object" output="screen">
+    <param name="debug_directory" type="string" value="$(arg debug_directory)"/>
+  </node>
+  <!-- -->
+
+</launch>
