@@ -2,6 +2,7 @@
 
 import stretch_funmap.max_height_image as mh
 import numpy as np
+import trimesh as tm
 import scipy.ndimage as nd
 import scipy.signal as si
 import cv2
@@ -937,6 +938,42 @@ def get_ellipse(region_properties):
     
     return ellipse
 
+def get_ellipse_pc(point_cloud):
+    # calculate line segments for ellipse axes
+    pc = point_cloud
+    centriod = get_center(pc)
+    filtered_pc = filter_pc(pc)
+    minor_axis_length = 2.0
+    major_axis_length = 4.0
+    major_vector = tm.points.major_axis(filtered_pc)
+
+    # find angle in radians with the x-axis
+    major_ang_rad = np.arccos(major_vector[0]/np.linalg.norm(major_vector))
+
+    minor_offset_x = (0.5 * math.sin(major_ang_rad) * minor_axis_length)
+    minor_offset_y = (0.5 * math.cos(major_ang_rad) * minor_axis_length)
+    minor_1_x = centroid[0] - minor_offset_x
+    minor_2_x = centroid[0] + minor_offset_x
+    minor_1_y = centroid[1] - minor_offset_y
+    minor_2_y = centroid[1] + minor_offset_y
+
+    major_offset_x = (0.5 * math.cos(major_ang_rad) * major_axis_length)
+    major_offset_y = (0.5 * math.sin(major_ang_rad) * major_axis_length)
+    major_1_x = centroid[0] + major_offset_x
+    major_2_x = centroid[0] - major_offset_x
+    major_1_y = centroid[1] - major_offset_y
+    major_2_y = centroid[1] + major_offset_y
+
+    centroid = (centroid[0], centroid[1])
+    minor_axis = ((minor_1_x, minor_1_y), (minor_2_x, minor_2_y))
+    major_axis = ((major_1_x, major_1_y), (major_2_x, major_2_y))
+
+    ellipse = {'centroid': centroid,
+               'minor': {'axis': minor_axis, 'length': minor_axis_length},
+               'major': {'axis': major_axis, 'length': major_axis_length, 'ang_rad': major_ang_rad}}
+    
+    return ellipse
+
 def draw_ellipse_axes(image, ellipse, color=[255, 255, 255], draw_line_contrast=True):
     minor_axis = np.int32(np.round(np.array(ellipse['minor']['axis'])))
     major_axis = np.int32(np.round(np.array(ellipse['major']['axis'])))
@@ -956,7 +993,41 @@ def draw_ellipse_axes_from_region(image, region_properties, color=[255, 255, 255
         cv2.line(image, tuple(major_axis[0]), tuple(major_axis[1]), [0,0,0], 3)
     cv2.line(image, tuple(minor_axis[0]), tuple(minor_axis[1]), color, 1)
     cv2.line(image, tuple(major_axis[0]), tuple(major_axis[1]), color, 1)
+
+def filter_pc(point_cloud):
+    pc = point_cloud
+
+    # flatten the point cloud
+    img_size, _ = pc.shape
     
+    # extract x, y, z values
+    x_values = pc[:, 0]
+    y_values = pc[:, 1]
+    z_values = pc[:, 2]
+
+    # get filtering percentage
+    filter_num = img_size // 10
+
+    # get the value of the bottom filtering percentage
+    x_min = x_values[np.argsort(x_values)[filter_num]]
+    y_min = y_values[np.argsort(y_values)[filter_num]]
+    z_min = z_values[np.argsort(z_values)[filter_num]]
+
+    # get the value of the top filtering percentage
+    x_max = x_values[np.argsort(x_values)[-filter_num]]
+    y_max = y_values[np.argsort(y_values)[-filter_num]]
+    z_max = z_values[np.argsort(z_values)[-filter_num]]
+
+    min_x = pc[pc[:, 0]>=x_min]
+    min_y = min_x[min_x[:, 1]>=y_min]
+    min_z = min_y[min_y[:, 2]>=z_min]
+
+    max_x = min_z[min_z[:, 0]<x_max]
+    max_y = max_x[max_x[:, 1]<y_max]
+    filter_pc = max_y[max_y[:, 2]<z_max]
+
+    return filter_pc
+
 def get_center(pc):
     """
     Finds the center of a point cloud by filtering out a percentage of the extremes 
