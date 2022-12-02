@@ -926,6 +926,36 @@ def get_ellipse(region_properties):
     
     return ellipse
 
+def get_ellipse_pc(point_cloud):
+    # calculate line segments for ellipse axes
+    pc = point_cloud
+    center = self.get_center(pc)
+    major_ang_rad = r.orientation
+
+    minor_offset_x = (0.5 * math.sin(major_ang_rad) * r.minor_axis_length)
+    minor_offset_y = (0.5 * math.cos(major_ang_rad) * r.minor_axis_length)
+    minor_1_x = centroid_x - minor_offset_x
+    minor_2_x = centroid_x + minor_offset_x
+    minor_1_y = centroid_y - minor_offset_y
+    minor_2_y = centroid_y + minor_offset_y
+
+    major_offset_x = (0.5 * math.cos(major_ang_rad) * r.major_axis_length)
+    major_offset_y = (0.5 * math.sin(major_ang_rad) * r.major_axis_length)
+    major_1_x = centroid_x + major_offset_x
+    major_2_x = centroid_x - major_offset_x
+    major_1_y = centroid_y - major_offset_y
+    major_2_y = centroid_y + major_offset_y
+
+    centroid = (centroid_x, centroid_y)
+    minor_axis = ((minor_1_x, minor_1_y), (minor_2_x, minor_2_y))
+    major_axis = ((major_1_x, major_1_y), (major_2_x, major_2_y))
+
+    ellipse = {'centroid': centroid,
+               'minor': {'axis': minor_axis, 'length': r.minor_axis_length},
+               'major': {'axis': major_axis, 'length': r.major_axis_length, 'ang_rad': major_ang_rad}}
+    
+    return ellipse
+
 def draw_ellipse_axes(image, ellipse, color=[255, 255, 255], draw_line_contrast=True):
     minor_axis = np.int32(np.round(np.array(ellipse['minor']['axis'])))
     major_axis = np.int32(np.round(np.array(ellipse['major']['axis'])))
