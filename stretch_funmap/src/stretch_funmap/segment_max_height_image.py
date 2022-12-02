@@ -189,7 +189,13 @@ def find_object_to_grasp(height_image, display_on=False):
         grasp_location_z_pix = surface_height_pix + (grasp_location_above_surface_m / m_per_unit)
         
         max_object_height_above_surface_m = object_max_height_m
-        
+        # Prepare grasp target information.
+        grasp_location_xy_pix = object_ellipse['centroid']
+        major_length_pix = object_ellipse['major']['length']
+        major_length_m = m_per_pix * major_length_pix
+        minor_length_pix = object_ellipse['minor']['length']
+        diff_m = m_per_pix * (major_length_pix - minor_length_pix)
+
         grasp_target = {'location_xy_pix': grasp_location_xy_pix,
                         'elongated': grasp_elongated,
                         'width_pix' : grasp_width_pix,
@@ -211,8 +217,23 @@ def find_object_to_grasp(height_image, display_on=False):
 
         return grasp_target
 
+def find_object_pointcloud(point_cloud):
+    center = get_center(point_cloud)
+    ellipse = get_ellipse_pc
 
-
+    # grasp_target = {'location_xy_pix': grasp_location_xy_pix,
+    #                     'elongated': grasp_elongated,
+    #                     'width_pix' : grasp_width_pix,
+    #                     'width_m' : grasp_width_m,
+    #                     'aperture_axis_pix': grasp_aperture_axis_pix,
+    #                     'long_axis_pix': grasp_long_axis_pix,
+    #                     'location_above_surface_m': grasp_location_above_surface_m,
+    #                     'location_z_pix': grasp_location_z_pix,
+    #                     'object_max_height_above_surface_m': object_max_height_m,
+    #                     'surface_convex_hull_mask': surface_convex_hull_mask,
+    #                     'object_selector': object_selector,
+    #                     'object_ellipse': object_ellipse}
+    return center
 def draw_grasp(rgb_image, grasp_target):
     surface_convex_hull_mask = grasp_target['surface_convex_hull_mask']
     object_selector = grasp_target['object_selector']

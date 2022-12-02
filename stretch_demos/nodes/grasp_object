@@ -41,7 +41,8 @@ class GraspObjectNode(hm.HelloNode):
         self.lift_position = None
         self.manipulation_view = None
         self.debug_directory = None
-        
+        self.cup_pointcloud = None
+
     def joint_states_callback(self, joint_states):
         with self.joint_states_lock: 
             self.joint_states = joint_states
@@ -50,7 +51,11 @@ class GraspObjectNode(hm.HelloNode):
         lift_position, lift_velocity, lift_effort = hm.get_lift_state(joint_states)
         self.lift_position = lift_position
         self.left_finger_position, temp1, temp2 = hm.get_left_finger_state(joint_states)
-        
+    
+    def cup_pointcloud_callback(self, cup_pointcloud):
+        self.cup_pointcloud = cup_pointcloud
+        print(cup_pointcloud)
+
     def lower_tool_until_contact(self):
         rospy.loginfo('lower_tool_until_contact')
         trigger_request = TriggerRequest() 
@@ -264,6 +269,8 @@ class GraspObjectNode(hm.HelloNode):
 
         self.joint_states_subscriber = rospy.Subscriber('/stretch/joint_states', JointState, self.joint_states_callback)
         
+        self.cup_pointcloud_subscriber = rospy.Subscriber('/yolov5/point_cloud2', PointCloud2, self.cup_pointcloud_callback)
+
         self.trigger_grasp_object_service = rospy.Service('/grasp_object/trigger_grasp_object',
                                                            Trigger,
                                                            self.trigger_grasp_object_callback)
