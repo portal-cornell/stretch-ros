@@ -365,7 +365,8 @@ class ManipulationView():
         return reach_m
 
     def get_grasp_target(self, tf2_buffer, max_object_planar_distance_m=1.0):
-        grasp_target = sm.find_object_to_grasp(self.max_height_im, display_on=True)
+        # grasp_target = sm.find_object_to_grasp(self.max_height_im, display_on=True)
+        grasp_target = sm.find_object_pointcloud(self.cup_pointcloud)
         if grasp_target is None:
             return None
         

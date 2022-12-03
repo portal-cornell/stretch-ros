@@ -272,6 +272,7 @@ def find_object_pointcloud(point_cloud):
     print('_________________________________')
 
     return grasp_target
+    
 def draw_grasp(rgb_image, grasp_target):
     surface_convex_hull_mask = grasp_target['surface_convex_hull_mask']
     object_selector = grasp_target['object_selector']
