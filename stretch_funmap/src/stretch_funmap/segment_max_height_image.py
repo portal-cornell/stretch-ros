@@ -218,22 +218,60 @@ def find_object_to_grasp(height_image, display_on=False):
         return grasp_target
 
 def find_object_pointcloud(point_cloud):
-    center = get_center(point_cloud)
-    ellipse = get_ellipse_pc
+    """
+    ellipse = {'centroid': centroid,
+               'minor': {'axis': minor_axis, 'length': r.minor_axis_length},
+               'major': {'axis': major_axis, 'length': r.major_axis_length, 'ang_rad': major_ang_rad}}
+    """
+    object_ellipse = get_ellipse_pc(point_cloud)
+    m_per_pix = 0.006
+    m_per_unit = 0.004566929133858267
+    _, _, grasp_location_z_pix = get_center(point_cloud)
+    grasp_location_above_surface_m = grasp_location_z_pix * m_per_unit
+    object_max_height_m = np.max(point_cloud[:, 2]) * m_per_unit
 
-    # grasp_target = {'location_xy_pix': grasp_location_xy_pix,
-    #                     'elongated': grasp_elongated,
-    #                     'width_pix' : grasp_width_pix,
-    #                     'width_m' : grasp_width_m,
-    #                     'aperture_axis_pix': grasp_aperture_axis_pix,
-    #                     'long_axis_pix': grasp_long_axis_pix,
-    #                     'location_above_surface_m': grasp_location_above_surface_m,
-    #                     'location_z_pix': grasp_location_z_pix,
-    #                     'object_max_height_above_surface_m': object_max_height_m,
-    #                     'surface_convex_hull_mask': surface_convex_hull_mask,
-    #                     'object_selector': object_selector,
-    #                     'object_ellipse': object_ellipse}
-    return center
+    # Prepare grasp target information.
+    grasp_location_xy_pix = object_ellipse['centroid']
+    major_length_pix = object_ellipse['major']['length']
+    major_length_m = m_per_pix * major_length_pix
+    minor_length_pix = object_ellipse['minor']['length']
+    diff_m = m_per_pix * (major_length_pix - minor_length_pix)
+
+    print('object_ellipse =', object_ellipse)
+
+    max_gripper_aperture_m = 0.08
+    if (diff_m > 0.02) or (major_length_m > max_gripper_aperture_m):
+        grasp_elongated = True
+        grasp_width_pix = minor_length_pix
+        grasp_aperture_axis_pix = object_ellipse['minor']['axis']
+        grasp_long_axis_pix = object_ellipse['major']['axis']
+    else:
+        grasp_elongated = False
+        grasp_width_pix = major_length_pix
+        grasp_aperture_axis_pix = None
+        grasp_long_axis_pix = None
+
+    grasp_width_m = m_per_pix * grasp_width_pix
+
+    grasp_target = {'location_xy_pix': grasp_location_xy_pix,
+                        'elongated': grasp_elongated,
+                        'width_pix' : grasp_width_pix,
+                        'width_m' : grasp_width_m,
+                        'aperture_axis_pix': grasp_aperture_axis_pix,
+                        'long_axis_pix': grasp_long_axis_pix,
+                        'location_above_surface_m': grasp_location_above_surface_m,
+                        'location_z_pix': grasp_location_z_pix,
+                        'object_max_height_above_surface_m': object_max_height_m,
+                        'surface_convex_hull_mask': None,
+                        'object_selector': None,
+                        'object_ellipse': object_ellipse}
+    
+    print('_________________________________')
+    print('grasp_target =')
+    print(grasp_target)
+    print('_________________________________')
+
+    return grasp_target
 def draw_grasp(rgb_image, grasp_target):
     surface_convex_hull_mask = grasp_target['surface_convex_hull_mask']
     object_selector = grasp_target['object_selector']
@@ -962,7 +1000,7 @@ def get_ellipse(region_properties):
 def get_ellipse_pc(point_cloud):
     # calculate line segments for ellipse axes
     pc = point_cloud
-    centriod = get_center(pc)
+    centroid = get_center(pc)
     filtered_pc = filter_pc(pc)
     minor_axis_length = 7.0
     major_axis_length = 12.16
@@ -1015,7 +1053,7 @@ def draw_ellipse_axes_from_region(image, region_properties, color=[255, 255, 255
     cv2.line(image, tuple(minor_axis[0]), tuple(minor_axis[1]), color, 1)
     cv2.line(image, tuple(major_axis[0]), tuple(major_axis[1]), color, 1)
 
-def filter_pc(point_cloud):
+def filter_pc(point_cloud, divide_factor=10):
     pc = point_cloud
 
     # flatten the point cloud
@@ -1027,7 +1065,7 @@ def filter_pc(point_cloud):
     z_values = pc[:, 2]
 
     # get filtering percentage
-    filter_num = img_size // 10
+    filter_num = img_size // divide_factor
 
     # get the value of the bottom filtering percentage
     x_min = x_values[np.argsort(x_values)[filter_num]]
@@ -1045,9 +1083,9 @@ def filter_pc(point_cloud):
 
     max_x = min_z[min_z[:, 0]<x_max]
     max_y = max_x[max_x[:, 1]<y_max]
-    filter_pc = max_y[max_y[:, 2]<z_max]
+    filtered_pc = max_y[max_y[:, 2]<z_max]
 
-    return filter_pc
+    return filtered_pc
 
 def get_center(pc):
     """
