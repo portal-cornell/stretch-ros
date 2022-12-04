@@ -5,6 +5,9 @@ import rospy
 import actionlib
 import sys
 import time
+import subprocess
+import signal
+import os
 
 # We need the MoveBaseAction and MoveBaseGoal from the move_base_msgs package.
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
@@ -79,6 +82,16 @@ if __name__ == '__main__':
     """RESET ARM ONLY"""
     
     nav.go_to(TABLE, planner.done_callback("went_to_table"))  # go roughly to the table
+
+    input("waiting to start grasp node launch file")
+
+    p = subprocess.Popen(["roslaunch", "stretch_demos", "grasp_object_demo_2022.launch"])
+
+    input("started the grasp node launch file")
+
+    os.kill(p.pid, signal.SIGINT)
+
+    input("killed the grasp node launch file")
 
     nav.go_to(MOVE_WITH_CART_POSE, planner.done_callback("pos_ready_for_cart"))
     
