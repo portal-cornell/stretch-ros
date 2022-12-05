@@ -1,13 +1,13 @@
+#!/usr/bin/env python3
+
 import argparse as ap
 import rospy
 from std_msgs.msg import String
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import MarkerArray
 from visualization_msgs.msg import Marker
+from geometry_msgs.msg import PoseStamped
 import math
-import hello_helpers.hello_misc as hm
-import roslib
-roslib.load_manifest('visualization_marker_tutorials')
 
 # p1, p2, p3 are the rigid body points
 global p1
@@ -15,20 +15,23 @@ global p2
 global p3
 
 # create an object called line_segment_1 and line_segment_2, each with two rigid bodies
+p1 = None
+p2 = None
+p3 = None
 
+class ArmNode():
 
-class ArmNode(hm.HelloNode):
-
-    def __init__(self, p1, p2, p3):
-        self.x1 = p1.x
-        self.y1 = p1.y
-        self.z1 = p1.z
-        self.x2 = p2.x
-        self.y2 = p2.y
-        self.z2 = p2.z
-        self.x3 = p3.x
-        self.y3 = p3.y
-        self.z3 = p3.z
+    def __init__(self):
+        pass
+        # self.x1 = p1.x
+        # self.y1 = p1.y
+        # self.z1 = p1.z
+        # self.x2 = p2.x
+        # self.y2 = p2.y
+        # self.z2 = p2.z
+        # self.x3 = p3.x
+        # self.y3 = p3.y
+        # self.z3 = p3.z
 
     def create_line_segment(self, p1, p2):
         markerArray = MarkerArray()
@@ -37,7 +40,7 @@ class ArmNode(hm.HelloNode):
         marker1 = Marker()
         marker1.id = count
         marker1.lifetime = rospy.Duration()
-        marker1.header.frame_id = "/"
+        marker1.header.frame_id = "map"
         marker1.type = marker1.SPHERE
         marker1.action = marker1.ADD
         marker1.scale.x = 0.2
@@ -57,7 +60,7 @@ class ArmNode(hm.HelloNode):
         marker2 = Marker()
         marker2.id = count
         marker2.lifetime = rospy.Duration()
-        marker2.header.frame_id = "/"
+        marker2.header.frame_id = "map"
         marker2.type = marker2.SPHERE
         marker2.action = marker2.ADD
         marker2.scale.x = 0.2
@@ -76,7 +79,7 @@ class ArmNode(hm.HelloNode):
         line = Marker()
         line.id = count
         line.lifetime = rospy.Duration()
-        line.header.frame_id = "/"
+        line.header.frame_id = "map"
         line.type = line.LINE_STRIP
         line.action = line.ADD
         line.scale.x = 0.4
@@ -107,30 +110,38 @@ class ArmNode(hm.HelloNode):
         return markerArray
 
     def callback1(self, data):
-        rospy.loginfo(rospy.get_caller_id() + "I heard %s", data.data)
+        global p1
+        p1 = data.pose.position
 
     def callback2(self, data):
-        rospy.loginfo(rospy.get_caller_id() + "I heard %s", data.data)
+        global p2
+        p2 = data.pose.position
 
     def callback3(self, data):
-        rospy.loginfo(rospy.get_caller_id() + "I heard %s", data.data)
+        global p3
+        p3 = data.pose.position
 
     def main(self):
+        global p1
+        global p2
+        global p3
         rospy.init_node('register', anonymous=True)
-        rospy.Subscriber(topic, MarkerArray, self.callback1)
-        rospy.Subscriber(topic, MarkerArray, self.callback2)
-        rospy.Subscriber(topic, MarkerArray, self.callback3)
-        rospy.spin()
+        rospy.Subscriber("/vrpn_client_node/wrist/pose", PoseStamped, self.callback1)
+        rospy.Subscriber("/vrpn_client_node/elbow/pose", PoseStamped, self.callback2)
+        rospy.Subscriber("/vrpn_client_node/shoulder/pose", PoseStamped, self.callback3)
 
-        publisher = rospy.Publisher("arm_publisher", MarkerArray)
+        wrist_to_elbow_publisher = rospy.Publisher("/wrist_to_elbow", MarkerArray)
+        elbow_to_shoulder_publisher = rospy.Publisher("/elbow_to_shoulder", MarkerArray)
         rate = rospy.Rate(10)
         while not rospy.is_shutdown():
+            if p1 is None or p3 is None or p2 is None: continue
+            print(p1)
             wrist_to_elbow = self.create_line_segment(p1, p2)
             rospy.loginfo(wrist_to_elbow)
-            publisher.publish(wrist_to_elbow)
+            wrist_to_elbow_publisher.publish(wrist_to_elbow)
             elbow_to_shoulder = self.create_line_segment(p2, p3)
             rospy.loginfo(elbow_to_shoulder)
-            publisher.publish(elbow_to_shoulder)
+            elbow_to_shoulder_publisher.publish(elbow_to_shoulder)
             rate.sleep()
 
 
