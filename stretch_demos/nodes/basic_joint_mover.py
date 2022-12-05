@@ -15,6 +15,7 @@ class JointMover():
             rospy.signal_shutdown('Unable to connect to arm action server. Timeout exceeded.')
             sys.exit()
 
+
     def issue_one_target_command(self, joint_name_list, position_list, task_name):
         """
         Function that makes an action call and sends multiple joint trajectory goals
@@ -42,29 +43,65 @@ class JointMover():
 
         self.issue_one_target_command(joint_name_list, target_position_list, "lift arm")
 
-    def extend_arm_before_latching_cart(self):
+
+    # def extend_arm_before_latching_cart(self):
+    #     target_position_list = [0.9269133518339224, 
+    #                             0.08809500066835729, 0.08809500066835729, 0.08809500066835729, 0.08809500066835729, 
+    #                             -1.3371199201069839, 
+    #                             -0.8866408953979006]
+
+    #     joint_name_list = ['joint_lift', 
+    #                             'joint_arm_l3', 'joint_arm_l2', 'joint_arm_l1', 'joint_arm_l0', 
+    #                             'joint_wrist_yaw',
+    #                             'joint_wrist_pitch']
+
+    #     self.issue_one_target_command(joint_name_list, target_position_list, "extend arm")    
+
+
+    def extend_arm_over_cart(self):
         target_position_list = [0.9269133518339224, 
-                                0.08809500066835729, 0.08809500066835729, 0.08809500066835729, 0.08809500066835729, 
-                                -1.3371199201069839, 
-                                -0.8866408953979006]
+                                0.08809500066835729, 0.08809500066835729, 0.08809500066835729, 0.08809500066835729]
+
         joint_name_list = ['joint_lift', 
-                                'joint_arm_l3', 'joint_arm_l2', 'joint_arm_l1', 'joint_arm_l0', 
-                                'joint_wrist_yaw',
-                                'joint_wrist_pitch']
+                                'joint_arm_l3', 'joint_arm_l2', 'joint_arm_l1', 'joint_arm_l0']
 
         self.issue_one_target_command(joint_name_list, target_position_list, "extend arm")    
 
+
+    def open_gripper(self):
+        # TODO: figure out the target position
+        target_position_list = []
+
+        joint_name_list = ["joint_gripper_finger_right", 
+                            "joint_gripper_finger_left"]
+
+        self.issue_one_target_command(joint_name_list, target_position_list, "open gripper")    
+
+
+    def rotate_wrist_before_latching_cart(self):
+        target_position_list = [-1.3371199201069839, 
+                                -0.8866408953979006]
+
+        joint_name_list = ['joint_wrist_yaw',
+                            'joint_wrist_pitch']
+
+        self.issue_one_target_command(joint_name_list, target_position_list, "rotate wrist") 
+
+
     def lower_arm_to_cart(self):
         target_position_list = [0.685428316319051]
+        
         joint_name_list = ["joint_lift"]
 
         self.issue_one_target_command(joint_name_list, target_position_list, "latch cart")
+
 
     def reset_arm(self):
         target_position_list = [0.3, 
                                 3.232259253198204e-05, 3.232259253198204e-05, 3.232259253198204e-05, 3.232259253198204e-05, 
                                 2.9995715989780476, 
                                 -0.013805827090970769]
+
         joint_name_list = ['joint_lift', 
                                 'joint_arm_l3', 'joint_arm_l2', 'joint_arm_l1', 'joint_arm_l0', 
                                 'joint_wrist_yaw',

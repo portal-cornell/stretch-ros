@@ -99,9 +99,19 @@ if __name__ == '__main__':
 
     time.sleep(3)
 
-    joint_mover.extend_arm_before_latching_cart()
+    joint_mover.extend_arm_over_cart()
 
     time.sleep(2.5)
+
+    """Need to test the time"""
+    joint_mover.open_gripper()
+
+    time.sleep(2)
+
+    joint_mover.rotate_wrist_before_latching_cart()
+
+    time.sleep(2)
+    """Need to test the time"""
 
     joint_mover.lower_arm_to_cart()
 
