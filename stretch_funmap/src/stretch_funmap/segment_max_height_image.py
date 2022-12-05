@@ -223,6 +223,9 @@ def find_object_pointcloud(point_cloud):
                'minor': {'axis': minor_axis, 'length': r.minor_axis_length},
                'major': {'axis': major_axis, 'length': r.major_axis_length, 'ang_rad': major_ang_rad}}
     """
+    old_frame_id = 'base_link'
+    new_frame_id = 'map'
+    
     object_ellipse = get_ellipse_pc(point_cloud)
     m_per_pix = 0.006
     m_per_unit = 0.004566929133858267

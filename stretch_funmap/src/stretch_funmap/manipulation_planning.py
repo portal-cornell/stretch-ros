@@ -246,6 +246,7 @@ class ManipulationView():
         self.max_height_im = rm.ROSMaxHeightImage(self.voi, m_per_pix, pixel_dtype)
         print(self.max_height_im.voi)
         self.max_height_im.print_info()
+        self.cup_pointcloud = None
         self.updated = False
 
     def move_head(self, move_to_pose):
@@ -870,6 +871,8 @@ class ManipulationView():
         self.max_height_im.clear()
         cloud_time = point_cloud_msg.header.stamp
         cloud_frame = point_cloud_msg.header.frame_id
+        print('cloud frame: ' + str(cloud_frame))
+        
         point_cloud = rn.numpify(point_cloud_msg)
         only_xyz = False
         if only_xyz:
@@ -880,6 +883,14 @@ class ManipulationView():
             self.max_height_im.from_rgb_points_with_tf2(rgb_points, cloud_frame, tf2_buffer)
         obstacle_im = self.max_height_im.image == 0
         self.updated = True
+    
+    def update_cup(self, cup_pointcloud_msg, tf2_buffer):
+        cloud_time = cup_pointcloud_msg.header.stamp
+        cloud_frame = cup_pointcloud_msg.header.frame_id
+        point_cloud = rn.numpify(cup_pointcloud_msg)
+        
+        self.cup_pointcloud = point_cloud
+        self.cup_updated = True
 
     def save_scan(self, filename):
         # Save the new scan to disk.
