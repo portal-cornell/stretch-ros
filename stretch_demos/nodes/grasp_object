@@ -28,6 +28,9 @@ import hello_helpers.hello_misc as hm
 import stretch_funmap.navigate as nv
 import stretch_funmap.manipulation_planning as mp
 
+import PyKDL
+from sensor_msgs.point_cloud2 import read_points, create_cloud, create_cloud_xyz32
+import trimesh as tm
 
 class GraspObjectNode(hm.HelloNode):
 
@@ -55,7 +58,8 @@ class GraspObjectNode(hm.HelloNode):
     
     def cup_pointcloud_callback(self, cup_pointcloud):
         self.cup_pointcloud = cup_pointcloud
-        print(cup_pointcloud)
+        # print(cup_pointcloud)
+        # input("CALLBACKED")
 
     def lower_tool_until_contact(self):
         rospy.loginfo('lower_tool_until_contact')
@@ -78,13 +82,13 @@ class GraspObjectNode(hm.HelloNode):
         manip.move_head(self.move_to_pose)
         rospy.sleep(head_settle_time_s)
         if scan_time_s is None:
-            # manip.update(self.point_cloud, self.tf2_buffer)
-            manip.update_cup(self.cup_pointcloud)
+            manip.update(self.point_cloud, self.tf2_buffer)
+            # manip.update_cup(self.cup_pointcloud)
         else:
             start_time_s = time.time()
             while ((time.time() - start_time_s) < scan_time_s): 
-                # manip.update(self.point_cloud, self.tf2_buffer)
-                manip.update_cup(self.cup_pointcloud)
+                manip.update(self.point_cloud, self.tf2_buffer)
+                # manip.update_cup(self.cup_pointcloud)
         if self.debug_directory is not None:
             dirname = self.debug_directory + 'grasp_object/'
             # If the directory does not already exist, create it.
@@ -123,36 +127,75 @@ class GraspObjectNode(hm.HelloNode):
             rospy.loginfo('Reorient the wrist.')
             pose = {'joint_wrist_yaw': 0.0}
             self.move_to_pose(pose)
-            
-        self.look_at_surface(scan_time_s = 3.0)
         
-        # grasp_target = self.manipulation_view.get_grasp_target(self.tf2_buffer)
-        import pickle
-        f = open('/home/strech/stretch_user/debug/grasp_target.pkl', 'rb')
-        grasp_target = pickle.load(f)
+        while self.cup_pointcloud is None:
+            continue
+        self.look_at_surface(scan_time_s = 3.0)
+        # print(self.cup_pointcloud)
+        input("Looked at surface")
+        
+        grasp_target = self.manipulation_view.get_grasp_target(self.tf2_buffer)
+        # import pickle
+        # f = open('/home/strech/stretch_user/debug/grasp_target.pkl', 'rb')
+        # grasp_target = pickle.load(f)
 
         ###load point cloud
         # cloud_time = cup_pointcloud_msg.header.stamp
         old_frame_id = self.cup_pointcloud.header.frame_id
-        point_cloud = rn.numpify(self.cup_pointcloud)
         
-        self.cup_pointcloud = point_cloud
-        self.cup_updated = True
+        
+        
 
         ## convert to map frame
         # old_frame_id = 'camera_color_optical_frame'
+        # point_cloud = rn.numpify(self.cup_pointcloud)
+        point_cloud = self.cup_pointcloud
+
         new_frame_id = 'map'
         lookup_time = rospy.Time(0) # return most recent transform
         timeout_ros = rospy.Duration(0.1)
         stamped_transform =  self.tf2_buffer.lookup_transform(new_frame_id, old_frame_id, lookup_time, timeout_ros)
         points_in_old_frame_to_new_frame_mat = rn.numpify(stamped_transform.transform)
-        point_cloud.change_frame(points_in_old_frame_to_new_frame_mat, new_frame_id)
+        cloud_out = self.do_transform_cloud(point_cloud, stamped_transform)
 
+        # cloud_out = point_cloud
+        self.transformed_pub.publish(cloud_out)
+        # self.cup_pointcloud = point_cloud
+        # self.cup_updated = True
 
         ## get centre 
-        xyz = rn.point_cloud2.get_xyz_points(point_cloud)
-        print(xyz)
+        # xyz = rn.point_cloud2.get_xyz_points(point_cloud)
+        print("Cloud_out")
+        print(cloud_out.header.frame_id)
+        # print(rn.numpify(cloud_out).shape)
+        # print(rn.point_cloud2.get_xyz_points(rn.numpify(cloud_out)).shape)
+        # input("Printed cloud out")
+        # print(rn.numpify(cloud_out))
+        # input("Printed cloud out")
+        # point_cloud = np.array(list(read_points(cloud_out, skip_nans=True, field_names=("x", "y", "z"))))
+        # print(point_cloud)
+        # input("Printed point cloud")
 
+        # grasp_target_new = self.find_object_pointcloud(point_cloud)
+        # grasp_target_new['location_xy_pix'] = grasp_target['location_xy_pix']
+        # ellipse = self.get_ellipse_pc(point_cloud)
+        print("Old = ", grasp_target['location_xy_pix'])
+        # cloud_out = 
+        # print(cloud_out[1])
+        input("Before XYZ")
+        point_cloud = rn.point_cloud2.get_xyz_points(rn.numpify(cloud_out))
+        print(point_cloud)
+        input("XYZ PCL")
+        center = self.get_center(point_cloud)
+        grasp_target['location_xy_pix'] = (center[2]/0.006, center[1]/0.006)
+        print("Center = ", center/0.006)
+        input()
+
+        # grasp_target['location_xy_pix'] = (ellipse['centroid'][0], ellipse['centroid'][1])
+        # grasp_target['object_ellipse'] = ellipse
+        
+        temp_cloud = create_cloud_xyz32(cloud_out.header, [center.tolist()])
+        self.point_cloud_pub.publish(temp_cloud)
 
         if grasp_target is None:
             return TriggerResponse(
@@ -284,8 +327,196 @@ class GraspObjectNode(hm.HelloNode):
             success=True,
             message='Completed object grasp!'
             )
-
     
+    def find_object_pointcloud(self, point_cloud):
+        """
+        ellipse = {'centroid': centroid,
+                'minor': {'axis': minor_axis, 'length': r.minor_axis_length},
+                'major': {'axis': major_axis, 'length': r.major_axis_length, 'ang_rad': major_ang_rad}}
+        """
+        old_frame_id = 'base_link'
+        new_frame_id = 'map'
+        
+        object_ellipse = self.get_ellipse_pc(point_cloud)
+        m_per_pix = 0.006
+        m_per_unit = 0.004566929133858267
+        _, _, grasp_location_z_pix = self.get_center(point_cloud)
+        grasp_location_above_surface_m = grasp_location_z_pix * m_per_unit
+        object_max_height_m = np.max(point_cloud[:, 2]) * m_per_unit
+
+        # Prepare grasp target information.
+        grasp_location_xy_pix = object_ellipse['centroid']
+        major_length_pix = object_ellipse['major']['length']
+        major_length_m = m_per_pix * major_length_pix
+        minor_length_pix = object_ellipse['minor']['length']
+        diff_m = m_per_pix * (major_length_pix - minor_length_pix)
+
+        print('object_ellipse =', object_ellipse)
+
+        max_gripper_aperture_m = 0.08
+        if (diff_m > 0.02) or (major_length_m > max_gripper_aperture_m):
+            grasp_elongated = True
+            grasp_width_pix = minor_length_pix
+            grasp_aperture_axis_pix = object_ellipse['minor']['axis']
+            grasp_long_axis_pix = object_ellipse['major']['axis']
+        else:
+            grasp_elongated = False
+            grasp_width_pix = major_length_pix
+            grasp_aperture_axis_pix = None
+            grasp_long_axis_pix = None
+
+        grasp_width_m = m_per_pix * grasp_width_pix
+
+        grasp_target = {'location_xy_pix': grasp_location_xy_pix,
+                            'elongated': grasp_elongated,
+                            'width_pix' : grasp_width_pix,
+                            'width_m' : grasp_width_m,
+                            'aperture_axis_pix': grasp_aperture_axis_pix,
+                            'long_axis_pix': grasp_long_axis_pix,
+                            'location_above_surface_m': grasp_location_above_surface_m,
+                            'location_z_pix': grasp_location_z_pix,
+                            'object_max_height_above_surface_m': object_max_height_m,
+                            'surface_convex_hull_mask': None,
+                            'object_selector': None,
+                            'object_ellipse': object_ellipse}
+        
+        print('_________________________________')
+        print('grasp_target =')
+        print(grasp_target)
+        print('_________________________________')
+
+        return grasp_target
+
+    def filter_pc(self, point_cloud, divide_factor=10):
+        pc = point_cloud
+
+        # flatten the point cloud
+        img_size, _ = pc.shape
+        
+        # extract x, y, z values
+        x_values = pc[:, 0]
+        y_values = pc[:, 1]
+        z_values = pc[:, 2]
+
+        # get filtering percentage
+        filter_num = img_size // divide_factor
+
+        # get the value of the bottom filtering percentage
+        x_min = x_values[np.argsort(x_values)[filter_num]]
+        y_min = y_values[np.argsort(y_values)[filter_num]]
+        z_min = z_values[np.argsort(z_values)[filter_num]]
+
+        # get the value of the top filtering percentage
+        x_max = x_values[np.argsort(x_values)[-filter_num]]
+        y_max = y_values[np.argsort(y_values)[-filter_num]]
+        z_max = z_values[np.argsort(z_values)[-filter_num]]
+
+        min_x = pc[pc[:, 0]>=x_min]
+        min_y = min_x[min_x[:, 1]>=y_min]
+        min_z = min_y[min_y[:, 2]>=z_min]
+
+        max_x = min_z[min_z[:, 0]<x_max]
+        max_y = max_x[max_x[:, 1]<y_max]
+        filtered_pc = max_y[max_y[:, 2]<z_max]
+
+        return filtered_pc
+
+    def get_center(self, pc):
+        """
+        Finds the center of a point cloud by filtering out a percentage of the extremes 
+        along x, y, z and then calculating the mean independently.
+        Returns: np.array([center_x, center_y, center_z])
+        """
+        # flatten the point cloud
+        img_size, _ = pc.shape
+        
+        # extract x, y, z values
+        x_values = pc[:, 0]
+        y_values = pc[:, 1]
+        z_values = pc[:, 2]
+
+        # get filtering percentage
+        filter_num = img_size // 10
+
+        # get the value of the bottom filtering percentage
+        # x_min = x_values[np.argsort(x_values)[filter_num]]
+        # y_min = y_values[np.argsort(y_values)[filter_num]]
+        # z_min = z_values[np.argsort(z_values)[filter_num]]
+
+        # get the value of the top filtering percentage
+        # x_max = x_values[np.argsort(x_values)[-filter_num]]
+        # y_max = y_values[np.argsort(y_values)[-filter_num]]
+        # z_max = z_values[np.argsort(z_values)[-filter_num]]
+
+        # filter out the bottom and top filtering percentage
+        # filter_x = x_values[x_values>=x_min]
+        # filter_y = y_values[y_values>=y_min]
+        # filter_z = z_values[z_values>=z_min]
+
+        # pc_x = filter_x[filter_x<x_max]
+        # pc_y = filter_y[filter_y<y_max]
+        # pc_z = filter_z[filter_z<z_max]
+
+        # find the center of the filtered point cloud
+        # center = np.array([np.mean(pc_x), np.mean(pc_y), np.mean(pc_z)])
+        center = np.array(np.mean(pc, axis =0))
+        print(center.shape)
+        input()
+        return center
+
+    def get_ellipse_pc(self, point_cloud):
+        # calculate line segments for ellipse axes
+        pc = point_cloud
+        centroid = self.get_center(pc)
+        filtered_pc = self.filter_pc(pc)
+        minor_axis_length = 7.0
+        major_axis_length = 12.16
+        major_vector = tm.points.major_axis(filtered_pc)
+
+        # find angle in radians with the x-axis
+        major_ang_rad = np.arccos(major_vector[0]/np.linalg.norm(major_vector))
+
+        minor_offset_x = (0.5 * math.sin(major_ang_rad) * minor_axis_length)
+        minor_offset_y = (0.5 * math.cos(major_ang_rad) * minor_axis_length)
+        minor_1_x = centroid[0] - minor_offset_x
+        minor_2_x = centroid[0] + minor_offset_x
+        minor_1_y = centroid[1] - minor_offset_y
+        minor_2_y = centroid[1] + minor_offset_y
+
+        major_offset_x = (0.5 * math.cos(major_ang_rad) * major_axis_length)
+        major_offset_y = (0.5 * math.sin(major_ang_rad) * major_axis_length)
+        major_1_x = centroid[0] + major_offset_x
+        major_2_x = centroid[0] - major_offset_x
+        major_1_y = centroid[1] - major_offset_y
+        major_2_y = centroid[1] + major_offset_y
+
+        centroid = (centroid[0], centroid[1])
+        minor_axis = ((minor_1_x, minor_1_y), (minor_2_x, minor_2_y))
+        major_axis = ((major_1_x, major_1_y), (major_2_x, major_2_y))
+
+        ellipse = {'centroid': centroid,
+                'minor': {'axis': minor_axis, 'length': minor_axis_length},
+                'major': {'axis': major_axis, 'length': major_axis_length, 'ang_rad': major_ang_rad}}
+    
+        return ellipse
+
+    def transform_to_kdl(self, t):
+        return PyKDL.Frame(PyKDL.Rotation.Quaternion(t.transform.rotation.x, t.transform.rotation.y,
+                                                  t.transform.rotation.z, t.transform.rotation.w),
+                        PyKDL.Vector(t.transform.translation.x, 
+                                     t.transform.translation.y, 
+                                     t.transform.translation.z))
+ 
+    # PointStamped
+    def do_transform_cloud(self, cloud, transform):
+        t_kdl = self.transform_to_kdl(transform)
+        points_out = []
+        for p_in in read_points(cloud):
+            p_out = t_kdl * PyKDL.Vector(p_in[0], p_in[1], p_in[2])
+            points_out.append((p_out[0], p_out[1], p_out[2]) + p_in[3:])
+        res = create_cloud(transform.header, cloud.fields, points_out)
+        return res
+
     def main(self):
         hm.HelloNode.main(self, 'grasp_object', 'grasp_object', wait_for_first_pointcloud=False)
 
@@ -296,6 +527,8 @@ class GraspObjectNode(hm.HelloNode):
         self.joint_states_subscriber = rospy.Subscriber('/stretch/joint_states', JointState, self.joint_states_callback)
         
         self.cup_pointcloud_subscriber = rospy.Subscriber('/yolov5/point_cloud2', PointCloud2, self.cup_pointcloud_callback)
+
+        self.transformed_pub = rospy.Publisher('/grasp_object/transformed', PointCloud2, queue_size=1)
 
         self.trigger_grasp_object_service = rospy.Service('/grasp_object/trigger_grasp_object',
                                                            Trigger,

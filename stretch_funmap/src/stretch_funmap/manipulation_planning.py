@@ -233,30 +233,30 @@ class ManipulationView():
         voi_origin = np.array([-(voi_side_x_m/2.0), -(voi_side_y_m + robot_right_edge_m), -lowest_distance_below_ground])
 
         # Define the VOI using the base_link frame
-        # old_frame_id = 'base_link'
-        # voi = rm.ROSVolumeOfInterest(old_frame_id, voi_origin, voi_axes, voi_side_x_m, voi_side_y_m, voi_height_m)
+        old_frame_id = 'base_link'
+        voi = rm.ROSVolumeOfInterest(old_frame_id, voi_origin, voi_axes, voi_side_x_m, voi_side_y_m, voi_height_m)
         # Convert the VOI to the map frame to handle mobile base changes
-        # new_frame_id = 'map'
-        # lookup_time = rospy.Time(0) # return most recent transform
-        # timeout_ros = rospy.Duration(0.1)
-        # stamped_transform =  tf2_buffer.lookup_transform(new_frame_id, old_frame_id, lookup_time, timeout_ros)
-        # points_in_old_frame_to_new_frame_mat = rn.numpify(stamped_transform.transform)
-        # voi.change_frame(points_in_old_frame_to_new_frame_mat, new_frame_id)
-        # self.voi = voi
-        # self.max_height_im = rm.ROSMaxHeightImage(self.voi, m_per_pix, pixel_dtype)
-        # print(self.max_height_im.voi)
-        # self.max_height_im.print_info()
-        # self.cup_pointcloud = None
-        # self.updated = False
-
-        old_frame_id = 'camera_color_optical_frame'
         new_frame_id = 'map'
         lookup_time = rospy.Time(0) # return most recent transform
         timeout_ros = rospy.Duration(0.1)
         stamped_transform =  tf2_buffer.lookup_transform(new_frame_id, old_frame_id, lookup_time, timeout_ros)
         points_in_old_frame_to_new_frame_mat = rn.numpify(stamped_transform.transform)
+        voi.change_frame(points_in_old_frame_to_new_frame_mat, new_frame_id)
+        self.voi = voi
+        self.max_height_im = rm.ROSMaxHeightImage(self.voi, m_per_pix, pixel_dtype)
+        print(self.max_height_im.voi)
+        self.max_height_im.print_info()
         self.cup_pointcloud = None
         self.updated = False
+
+        # old_frame_id = 'camera_color_optical_frame'
+        # new_frame_id = 'map'
+        # lookup_time = rospy.Time(0) # return most recent transform
+        # timeout_ros = rospy.Duration(0.1)
+        # stamped_transform =  tf2_buffer.lookup_transform(new_frame_id, old_frame_id, lookup_time, timeout_ros)
+        # points_in_old_frame_to_new_frame_mat = rn.numpify(stamped_transform.transform)
+        # self.cup_pointcloud = None
+        # self.updated = False
 
     def move_head(self, move_to_pose):
         tilt = -0.8
@@ -375,8 +375,8 @@ class ManipulationView():
         return reach_m
 
     def get_grasp_target(self, tf2_buffer, max_object_planar_distance_m=1.0):
-        # grasp_target = sm.find_object_to_grasp(self.max_height_im, display_on=True)
-        grasp_target = sm.find_object_pointcloud(self.cup_pointcloud)
+        grasp_target = sm.find_object_to_grasp(self.max_height_im, display_on=False)
+        # grasp_target = sm.find_object_pointcloud(self.cup_pointcloud)
         if grasp_target is None:
             return None
         
@@ -880,7 +880,7 @@ class ManipulationView():
         self.max_height_im.clear()
         cloud_time = point_cloud_msg.header.stamp
         cloud_frame = point_cloud_msg.header.frame_id
-        print('cloud frame: ' + str(cloud_frame))
+        # print('cloud frame: ' + str(cloud_frame))
         
         point_cloud = rn.numpify(point_cloud_msg)
         only_xyz = False
