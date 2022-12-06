@@ -9,7 +9,6 @@ __pycache__/
 
 # Checkpoints
 checkpoints/
-nodes/r3m
 
 # Distribution / packaging
 .Python
