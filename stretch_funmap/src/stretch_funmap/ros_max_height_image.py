@@ -276,5 +276,6 @@ class ROSMaxHeightImage(MaxHeightImage):
             
     def to_point_cloud(self, color_map=None):
         points = self.to_points(color_map)
-        point_cloud = ros_numpy.msgify(PointCloud2, points, stamp=self.last_update_time, frame_id=self.voi.frame_id)
+        # point_cloud = ros_numpy.msgify(PointCloud2, points, stamp=self.last_update_time, frame_id=self.voi.frame_id)
+        point_cloud = ros_numpy.msgify(PointCloud2, points, stamp=rospy.Time.now(), frame_id=self.voi.frame_id)
         return point_cloud

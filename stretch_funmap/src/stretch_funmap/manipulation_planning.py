@@ -893,13 +893,30 @@ class ManipulationView():
         obstacle_im = self.max_height_im.image == 0
         self.updated = True
     
-    def update_cup(self, cup_pointcloud_msg):
+    def update_cup(self, cup_pointcloud_msg, tf2_buffer):
+        self.max_height_im.clear()
         cloud_time = cup_pointcloud_msg.header.stamp
         cloud_frame = cup_pointcloud_msg.header.frame_id
-        point_cloud = rn.numpify(cup_pointcloud_msg)
+        # print('cloud frame: ' + str(cloud_frame))
         
-        self.cup_pointcloud = point_cloud
-        self.cup_updated = True
+        point_cloud = rn.numpify(cup_pointcloud_msg)
+        only_xyz = True
+        if only_xyz:
+            xyz = rn.point_cloud2.get_xyz_points(point_cloud)
+            self.max_height_im.from_points_with_tf2(xyz, cloud_frame, tf2_buffer)
+        else: 
+            rgb_points = rn.point_cloud2.split_rgb_field(point_cloud)
+            self.max_height_im.from_rgb_points_with_tf2(rgb_points, cloud_frame, tf2_buffer)
+        obstacle_im = self.max_height_im.image == 0
+        self.updated = True
+
+    # def update_cup(self, cup_pointcloud_msg):
+    #     cloud_time = cup_pointcloud_msg.header.stamp
+    #     cloud_frame = cup_pointcloud_msg.header.frame_id
+    #     point_cloud = rn.numpify(cup_pointcloud_msg)
+        
+    #     self.cup_pointcloud = point_cloud
+    #     self.cup_updated = True
 
     def save_scan(self, filename):
         # Save the new scan to disk.
