@@ -3,6 +3,9 @@
 \#*\#
 .\#*
 
+# vscode
+.vscode/
+
 # Python related
 *.pyc
 *.so
