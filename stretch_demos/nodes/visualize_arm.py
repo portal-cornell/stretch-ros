@@ -19,6 +19,7 @@ p1 = None
 p2 = None
 p3 = None
 
+
 class ArmNode():
 
     def __init__(self):
@@ -76,20 +77,45 @@ class ArmNode():
         marker2.pose.position.z = p2.z
         markerArray.markers.append(marker2)
 
-        line = Marker()
-        line.id = count
-        line.lifetime = rospy.Duration()
-        line.header.frame_id = "map"
-        line.type = line.LINE_STRIP
-        line.action = line.ADD
-        line.scale.x = 0.4
-        line.color.a = 1.0
-        line.color.b = 1.0
-        line.pose.orientation.w = 1.0
-        line.pose.position.x = 0
-        line.pose.position.y = 0
-        line.pose.position.z = 0
-        line.points = []
+        # line = Marker()
+        # line.id = count
+        # line.lifetime = rospy.Duration()
+        # line.header.frame_id = "map"
+        # line.type = line.CYLINDER
+        # line.action = line.ADD
+        # line.scale.x = 0.4
+        # line.color.a = 1.0
+        # line.color.b = 1.0
+        # line.pose.orientation.w = 1.0
+        # line.pose.position.x = 0
+        # line.pose.position.y = 0
+        # line.pose.position.z = 0
+        # line.points = []
+        # for i in range(100):
+        #     p = Point()
+        #     # p = start_point + i/100*(end_point-start_point)
+        #     p.x = marker1.pose.position.x + i/100 * \
+        #         (marker2.pose.position.x - marker1.pose.position.x)
+        #     p.y = marker1.pose.position.y + i/100 * \
+        #         (marker2.pose.position.y - marker1.pose.position.y)
+        #     p.z = marker1.pose.position.z + i/100 * \
+        #         (marker2.pose.position.z - marker1.pose.position.z)
+        #     line.points.append(p)
+
+        cylinder = Marker()
+        cylinder.id = count
+        cylinder.lifetime = rospy.Duration()
+        cylinder.header.frame_id = "map"
+        cylinder.type = cylinder.CYLINDER
+        cylinder.action = cylinder.ADD
+        cylinder.scale.x = 0.1
+        cylinder.scale.y = 0.1
+        cylinder.scale.z = marker2.pose.position.z - marker1.pose.position.z
+        cylinder.pose.orientation.w = 1.0
+        cylinder.pose.position.x = 0
+        cylinder.pose.position.y = 0
+        cylinder.pose.position.z = 0
+        cylinder.points = []
         for i in range(100):
             p = Point()
             # p = start_point + i/100*(end_point-start_point)
@@ -99,14 +125,10 @@ class ArmNode():
                 (marker2.pose.position.y - marker1.pose.position.y)
             p.z = marker1.pose.position.z + i/100 * \
                 (marker2.pose.position.z - marker1.pose.position.z)
-            line.points.append(p)
-        # for i in range(10):
-        #     p = Point()
-        #     p.x = i/2
-        #     p.y = i*math.sin(i/3)
-        #     p.z = 0
-        #     line.points.append(p)
-        markerArray.markers.append(line)  # add linestrip to markerArray
+            cylinder.points.append(p)
+
+        markerArray.markers.append(cylinder)
+
         return markerArray
 
     def callback1(self, data):
@@ -126,15 +148,21 @@ class ArmNode():
         global p2
         global p3
         rospy.init_node('register', anonymous=True)
-        rospy.Subscriber("/vrpn_client_node/wrist/pose", PoseStamped, self.callback1)
-        rospy.Subscriber("/vrpn_client_node/elbow/pose", PoseStamped, self.callback2)
-        rospy.Subscriber("/vrpn_client_node/shoulder/pose", PoseStamped, self.callback3)
+        rospy.Subscriber("/vrpn_client_node/wrist/pose",
+                         PoseStamped, self.callback1)
+        rospy.Subscriber("/vrpn_client_node/elbow/pose",
+                         PoseStamped, self.callback2)
+        rospy.Subscriber("/vrpn_client_node/shoulder/pose",
+                         PoseStamped, self.callback3)
 
-        wrist_to_elbow_publisher = rospy.Publisher("/wrist_to_elbow", MarkerArray)
-        elbow_to_shoulder_publisher = rospy.Publisher("/elbow_to_shoulder", MarkerArray)
+        wrist_to_elbow_publisher = rospy.Publisher(
+            "/wrist_to_elbow", MarkerArray)
+        elbow_to_shoulder_publisher = rospy.Publisher(
+            "/elbow_to_shoulder", MarkerArray)
         rate = rospy.Rate(10)
         while not rospy.is_shutdown():
-            if p1 is None or p3 is None or p2 is None: continue
+            if p1 is None or p3 is None or p2 is None:
+                continue
             print(p1)
             wrist_to_elbow = self.create_line_segment(p1, p2)
             rospy.loginfo(wrist_to_elbow)
