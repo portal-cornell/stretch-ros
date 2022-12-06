@@ -109,7 +109,46 @@ class GraspObjectNode(hm.HelloNode):
             at_goal = self.move_base.forward(forward_m, detect_obstacles=False, tolerance_distance_m=tolerance_distance_m)
         else:
             at_goal = self.move_base.backward(forward_m, detect_obstacles=False, tolerance_distance_m=tolerance_distance_m)
+    
+    def filter(self, points, proportion=0.5, reverse=True, axis = 0):
+        print(points.shape)
+        size = points.shape[0]
+        filter_points_idxs = (points[:, axis].argsort())
+        if reverse: filter_points_idxs = filter_points_idxs[::-1]
+        filter_points_idxs = filter_points_idxs[:int(proportion*size)]
+        return points[filter_points_idxs]
+
+    def change_frame_pcl(self, pcl, new_frame = 'map'):
+        old_frame_id = pcl.header.frame_id
+        lookup_time = rospy.Time(0) # return most recent transform
+        timeout_ros = rospy.Duration(0.1)
+        stamped_transform =  self.tf2_buffer.lookup_transform(new_frame, old_frame_id, lookup_time, timeout_ros)
+        # points_in_old_frame_to_new_frame_mat = rn.numpify(stamped_transform.transform)
+        cloud_out = self.do_transform_cloud(pcl, stamped_transform)
+        return cloud_out
+
+    def update_cup(self, cup_pointcloud_msg, tf2_buffer, proportion=0.1, reverse=True, axis = 0):
+        self.cup_maxheight.clear()
+        cup_pointcloud_msg = self.change_frame_pcl(cup_pointcloud_msg)
+        cloud_time = cup_pointcloud_msg.header.stamp
+        cloud_frame = cup_pointcloud_msg.header.frame_id
+        print('cloud frame: ' + str(cloud_frame))
         
+        point_cloud = rn.numpify(cup_pointcloud_msg)
+        only_xyz = True
+        xyz = None
+        if only_xyz:
+            xyz = rn.point_cloud2.get_xyz_points(point_cloud)
+            xyz = self.filter(xyz, proportion=proportion, reverse = reverse, axis = axis)
+
+            self.cup_maxheight.from_points_with_tf2(xyz, cloud_frame, tf2_buffer)
+            
+        else: 
+            rgb_points = rn.point_cloud2.split_rgb_field(point_cloud)
+            self.cup_maxheight.from_rgb_points_with_tf2(rgb_points, cloud_frame, tf2_buffer)
+        return xyz, cup_pointcloud_msg
+        # obstacle_im = self.cup_maxheight.image == 0
+
     def trigger_grasp_object_callback(self, request):
         actually_move = True
         max_lift_m = 1.09
@@ -186,7 +225,7 @@ class GraspObjectNode(hm.HelloNode):
         voi.change_frame(points_in_old_frame_to_new_frame_mat, new_frame_id)
 
         self.cup_maxheight = rm.ROSMaxHeightImage(voi, m_per_pix, pixel_dtype)
-        self.update_cup(self.cup_pointcloud, self.tf2_buffer)
+        xyz, pcl = self.update_cup(self.cup_pointcloud, self.tf2_buffer, proportion=0.75, reverse=1, axis=2)
 
         # print(grasp_target)
         # input("old grasp target")
@@ -252,14 +291,25 @@ class GraspObjectNode(hm.HelloNode):
         # # grasp_target['location_xy_pix'] = (ellipse['centroid'][0], ellipse['centroid'][1])
         # # grasp_target['object_ellipse'] = ellipse
         
-        # temp_cloud = create_cloud_xyz32(cloud_out.header, [center.tolist()])
-        # self.point_cloud_pub.publish(temp_cloud)
+        temp_cloud = create_cloud_xyz32(pcl.header, xyz.tolist())
+        self.point_cloud_pub.publish(temp_cloud)
+        input("SEE PCL")
 
-        if grasp_target is None:
-            return TriggerResponse(
-                success=False,
-                message='Failed to find grasp target'
-            )
+        # flag = True
+        # while flag:
+        #     prop = float(input("Enter proportion: "))
+        #     reverse = int(input("Reverse: "))
+        #     axis = int(input("Axis = "))
+        #     xyz, pcl = self.update_cup(self.cup_pointcloud, self.tf2_buffer, proportion = prop, reverse = reverse, axis = axis)
+        #     temp_cloud = create_cloud_xyz32(pcl.header, xyz.tolist())
+        #     self.point_cloud_pub.publish(temp_cloud)
+        #     check = input()
+        #     if check == 's': flag = False
+        # if grasp_target is None:
+        #     return TriggerResponse(
+        #         success=False,
+        #         message='Failed to find grasp target'
+        #     )
         print("Grasp target")
         print(grasp_target)
         input()
@@ -386,21 +436,7 @@ class GraspObjectNode(hm.HelloNode):
             message='Completed object grasp!'
             )
     
-    def update_cup(self, cup_pointcloud_msg, tf2_buffer):
-        self.cup_maxheight.clear()
-        cloud_time = cup_pointcloud_msg.header.stamp
-        cloud_frame = cup_pointcloud_msg.header.frame_id
-        # print('cloud frame: ' + str(cloud_frame))
-        
-        point_cloud = rn.numpify(cup_pointcloud_msg)
-        only_xyz = True
-        if only_xyz:
-            xyz = rn.point_cloud2.get_xyz_points(point_cloud)
-            self.cup_maxheight.from_points_with_tf2(xyz, cloud_frame, tf2_buffer)
-        else: 
-            rgb_points = rn.point_cloud2.split_rgb_field(point_cloud)
-            self.cup_maxheight.from_rgb_points_with_tf2(rgb_points, cloud_frame, tf2_buffer)
-        obstacle_im = self.cup_maxheight.image == 0
+    
         # self.updated = True
 
     def change_frame(self, points_in_old_frame_to_new_frame_mat, points_in_voi_to_frame_id_mat, new_frame_id, origin, axes):
