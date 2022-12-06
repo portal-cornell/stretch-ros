@@ -14,16 +14,16 @@
   </node>
   <!-- -->
 
+  <!-- KEYBOARD TELEOP -->
+  <node name="keyboard_teleop" pkg="stretch_core" type="keyboard_teleop" output="screen" args='--mapping_on'/>
+  <!-- -->
+
   <!-- OPEN DRAWER BC -->
-  <node name="open_drawer.py" pkg="stretch_core" type="open_drawer" output="screen" args=''/>
+  <node name="open_drawer" pkg="stretch_learning" type="open_drawer" output="screen" args=''/>
   <!-- -->
 
   <!-- VISUALIZE DETECTION -->
-  <node name="rviz" pkg="rviz" type="rviz" output="screen" args="-d $(find stretch_deep_perception)/rviz/object_detection.rviz" />
-  <!-- -->
-
-  <!-- KEYBOARD TELEOP -->
-  <node name="keyboard_teleop" pkg="stretch_core" type="keyboard_teleop" output="screen" args='--mapping_on'/>
+  <node name="rviz" pkg="rviz" type="rviz" output="screen" args="-d $(find stretch_learning)/rviz/open_drawer.rviz" />
   <!-- -->
     
 </launch>
