@@ -17,5 +17,5 @@
   <!-- OPEN DRAWER BC -->
   <node name="open_drawer.py" pkg="stretch_core" type="open_drawer" output="screen" args=''/>
   <!-- -->
-    
+
 </launch>
