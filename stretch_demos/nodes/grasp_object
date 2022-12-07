@@ -421,6 +421,20 @@ class GraspObjectNode(hm.HelloNode):
         # print(self.)
         # pose = {'joint_wrist_yaw': 3.00}
         self.move_to_pose(pose)
+
+        """Uncomment this part if you want to try running everything in one file"""
+        # Yuki 12/7 6 pm I was in the middle of checking this but stretch's battery died
+        #   Goal: find another way to move stretch without using FollowJointTrajectoryGoal
+        #           because that doesn't allow us to set the velocity
+        #   Source: https://github.com/hello-robot/stretch_ros/blob/637dd7f63757e1fdde2a20b4dde338b4dda13214/stretch_gazebo/nodes/keyboard_teleop_gazebo#L328
+        #       This seems to do sth promising because it's sending a Twist message which can set the velocity maybe... 
+        #               (someone should double check what Twist message does)
+        #   Problem: doesn't seem to do anything when I ran it 
+        """Stuff is happening in the hello_misc.py function, go there and see what I attempted to do"""
+        # pose = {'translate_mobile_base': 0.9}
+        # self.move_to_pose(pose)
+        # input("testing move")
+        """Uncomment this part if you want to try running everything in one file"""
         
         self.look_at_surface(scan_time_s = 3.0)
         rospy.sleep(0.1)
@@ -704,6 +718,9 @@ class GraspObjectNode(hm.HelloNode):
         self.cup_pointcloud_subscriber = rospy.Subscriber('/yolov5/point_cloud2', PointCloud2, self.cup_pointcloud_callback)
 
         self.transformed_pub = rospy.Publisher('/grasp_object/transformed', PointCloud2, queue_size=1)
+
+        self.cmd_vel_pub = rospy.Publisher('/stretch_diff_drive_controller/cmd_vel', Twist, queue_size=10)
+        self.twist = Twist()
 
         # self.trigger_grasp_object_service = rospy.Service('/grasp_object/trigger_grasp_object',
         #                                                    Trigger,

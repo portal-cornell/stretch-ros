@@ -77,6 +77,24 @@ class HelloNode:
     
     def move_to_pose(self, pose, return_before_done=False, custom_contact_thresholds=False):
         joint_names = [key for key in pose]
+
+        # Yuki 12/7 6 pm I was in the middle of checking this but stretch's battery died
+        #   Goal: find another way to move stretch without using FollowJointTrajectoryGoal
+        #           because that doesn't allow us to set the velocity
+        #   Source: https://github.com/hello-robot/stretch_ros/blob/637dd7f63757e1fdde2a20b4dde338b4dda13214/stretch_gazebo/nodes/keyboard_teleop_gazebo#L328
+        #       This seems to do sth promising because it's sending a Twist message which can set the velocity maybe... 
+        #               (someone should double check what Twist message does)
+        #   Problem: doesn't seem to do anything when I ran it 
+        # if len(joint_names) == 1 and joint_names[0] == "translate_mobile_base":
+        #     self.twist.linear.x = 1.0
+        #     self.twist.angular.z = 0.0
+        #     self.cmd_vel_pub.publish(self.twist)
+        #     time.sleep(5.0)
+        #     self.twist.linear.x = 0.0
+        #     self.twist.angular.z = 0.0
+        #     self.cmd_vel_pub.publish(self.twist)
+        #     return
+
         point = JointTrajectoryPoint()
         point.time_from_start = rospy.Duration(0.0)
 
@@ -86,6 +104,19 @@ class HelloNode:
         if not custom_contact_thresholds: 
             joint_positions = [pose[key] for key in joint_names]
             point.positions = joint_positions
+
+            # print(trajectory_goal.trajectory.joint_names)
+            # print(point)
+            # input("check joint names")
+            
+            # Yuki 12/7 6 pm I tried this, but doesn't work no matter what value you try to set
+
+            # if len(joint_names) == 1 and joint_names[0] == "translate_mobile_base":
+            #     joint_positions += [0.06]
+            #     trajectory_goal.trajectory.joint_names += ["inc"]
+            #     # point.velocities = [2.5]
+            #     # point.accelerations = [1.0]
+
             trajectory_goal.trajectory.points = [point]
         else:
             pose_correct = all([len(pose[key])==2 for key in joint_names])
