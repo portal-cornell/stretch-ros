@@ -22,11 +22,18 @@ import tf2_ros
 import argparse as ap        
 import numpy as np
 import os
+import ros_numpy as rn
 
 import hello_helpers.hello_misc as hm
 import stretch_funmap.navigate as nv
 import stretch_funmap.manipulation_planning as mp
 
+import PyKDL
+from sensor_msgs.point_cloud2 import read_points, create_cloud, create_cloud_xyz32
+import trimesh as tm
+import stretch_funmap.ros_max_height_image as rm
+import skimage as sk
+import cv2
 
 class GraspObjectNode(hm.HelloNode):
 
@@ -41,7 +48,9 @@ class GraspObjectNode(hm.HelloNode):
         self.lift_position = None
         self.manipulation_view = None
         self.debug_directory = None
-        
+        self.cup_pointcloud = None
+        self.cup_maxheight = None
+
     def joint_states_callback(self, joint_states):
         with self.joint_states_lock: 
             self.joint_states = joint_states
@@ -50,12 +59,17 @@ class GraspObjectNode(hm.HelloNode):
         lift_position, lift_velocity, lift_effort = hm.get_lift_state(joint_states)
         self.lift_position = lift_position
         self.left_finger_position, temp1, temp2 = hm.get_left_finger_state(joint_states)
-        
-    def lower_tool_until_contact(self):
-        rospy.loginfo('lower_tool_until_contact')
-        trigger_request = TriggerRequest() 
-        trigger_result = self.trigger_lower_until_contact_service(trigger_request)
-        rospy.loginfo('trigger_result = {0}'.format(trigger_result))
+    
+    def cup_pointcloud_callback(self, cup_pointcloud):
+        self.cup_pointcloud = cup_pointcloud
+        # print(cup_pointcloud)
+        # input("CALLBACKED")
+
+    # def lower_tool_until_contact(self):
+    #     rospy.loginfo('lower_tool_until_contact')
+    #     trigger_request = TriggerRequest() 
+    #     trigger_result = self.trigger_lower_until_contact_service(trigger_request)
+    #     rospy.loginfo('trigger_result = {0}'.format(trigger_result))
         
     def move_to_initial_configuration(self):
         initial_pose = {'wrist_extension': 0.01,
@@ -73,10 +87,12 @@ class GraspObjectNode(hm.HelloNode):
         rospy.sleep(head_settle_time_s)
         if scan_time_s is None:
             manip.update(self.point_cloud, self.tf2_buffer)
+            # manip.update_cup(self.cup_pointcloud, self.tf2_buffer)
         else:
             start_time_s = time.time()
             while ((time.time() - start_time_s) < scan_time_s): 
                 manip.update(self.point_cloud, self.tf2_buffer)
+                # manip.update_cup(self.cup_pointcloud, self.tf2_buffer)
         if self.debug_directory is not None:
             dirname = self.debug_directory + 'grasp_object/'
             # If the directory does not already exist, create it.
@@ -93,8 +109,292 @@ class GraspObjectNode(hm.HelloNode):
             at_goal = self.move_base.forward(forward_m, detect_obstacles=False, tolerance_distance_m=tolerance_distance_m)
         else:
             at_goal = self.move_base.backward(forward_m, detect_obstacles=False, tolerance_distance_m=tolerance_distance_m)
+    
+    def filter(self, points, proportion=0.5, reverse=True, axis = 0):
+        print(points.shape)
+        size = points.shape[0]
+        filter_points_idxs = (points[:, axis].argsort())
+        if reverse: filter_points_idxs = filter_points_idxs[::-1]
+        filter_points_idxs = filter_points_idxs[:int(proportion*size)]
+        return points[filter_points_idxs]
+
+    def change_frame_pcl(self, pcl, new_frame = 'map'):
+        old_frame_id = pcl.header.frame_id
+        lookup_time = rospy.Time(0) # return most recent transform
+        timeout_ros = rospy.Duration(0.1)
+        stamped_transform =  self.tf2_buffer.lookup_transform(new_frame, old_frame_id, lookup_time, timeout_ros)
+        # points_in_old_frame_to_new_frame_mat = rn.numpify(stamped_transform.transform)
+        cloud_out = self.do_transform_cloud(pcl, stamped_transform)
+        return cloud_out
+
+    def update_cup(self, cup_pointcloud_msg, tf2_buffer, proportion=0.1, reverse=True, axis = 0):
+        self.cup_maxheight.clear()
+        cup_pointcloud_msg = self.change_frame_pcl(cup_pointcloud_msg)
+        cloud_time = cup_pointcloud_msg.header.stamp
+        cloud_frame = cup_pointcloud_msg.header.frame_id
+        print('cloud frame: ' + str(cloud_frame))
         
-    def trigger_grasp_object_callback(self, request):
+        point_cloud = rn.numpify(cup_pointcloud_msg)
+        only_xyz = True
+        xyz = None
+        if only_xyz:
+            xyz = rn.point_cloud2.get_xyz_points(point_cloud)
+            xyz = self.filter(xyz, proportion=proportion, reverse = reverse, axis = axis)
+
+            self.cup_maxheight.from_points_with_tf2(xyz, cloud_frame, tf2_buffer)
+            
+        else: 
+            rgb_points = rn.point_cloud2.split_rgb_field(point_cloud)
+            self.cup_maxheight.from_rgb_points_with_tf2(rgb_points, cloud_frame, tf2_buffer)
+        return xyz, cup_pointcloud_msg
+        # obstacle_im = self.cup_maxheight.image == 0
+
+    def get_ellipse(self, region_properties):
+        # calculate line segments for ellipse axes
+        r = region_properties
+        centroid_y, centroid_x = r.centroid
+        major_ang_rad = r.orientation
+
+        minor_offset_x = (0.5 * math.sin(major_ang_rad) * r.minor_axis_length)
+        minor_offset_y = (0.5 * math.cos(major_ang_rad) * r.minor_axis_length)
+        minor_1_x = centroid_x - minor_offset_x
+        minor_2_x = centroid_x + minor_offset_x
+        minor_1_y = centroid_y - minor_offset_y
+        minor_2_y = centroid_y + minor_offset_y
+
+        major_offset_x = (0.5 * math.cos(major_ang_rad) * r.major_axis_length)
+        major_offset_y = (0.5 * math.sin(major_ang_rad) * r.major_axis_length)
+        major_1_x = centroid_x + major_offset_x
+        major_2_x = centroid_x - major_offset_x
+        major_1_y = centroid_y - major_offset_y
+        major_2_y = centroid_y + major_offset_y
+
+        centroid = (centroid_x, centroid_y)
+        minor_axis = ((minor_1_x, minor_1_y), (minor_2_x, minor_2_y))
+        major_axis = ((major_1_x, major_1_y), (major_2_x, major_2_y))
+
+        ellipse = {'centroid': centroid,
+                'minor': {'axis': minor_axis, 'length': r.minor_axis_length},
+                'major': {'axis': major_axis, 'length': r.major_axis_length, 'ang_rad': major_ang_rad}}
+        
+        return ellipse
+
+    def find_cup_to_grasp(self, height_image, display_on=True): 
+        h_image = height_image.image
+        m_per_unit = height_image.m_per_height_unit
+        m_per_pix = height_image.m_per_pix
+        height, width = height_image.image.shape
+        robot_xy_pix = [width/2, 0]
+        # surface_mask, plane_parameters = find_closest_flat_surface(height_image, robot_xy_pix, display_on=False)
+
+        # if surface_mask is None:
+        #     if display_on: 
+        #         print('No elevated surface found.')
+        #     return None
+        
+        # surface_height_pix = np.max(h_image[surface_mask > 0])
+        # surface_height_m = m_per_unit * surface_height_pix
+        # height_image.apply_planar_correction(plane_parameters, surface_height_pix)
+        # h_image = height_image.image
+        # if display_on: 
+        #     cv2.imshow('corrected height image', h_image)
+        #     cv2.waitKey(0)
+        #     cv2.destroyAllWindows()
+        #     cv2.imshow('rgb image', height_image.rgb_image)
+        #     cv2.waitKey(0)
+        #     cv2.destroyAllWindows()
+        # if display_on: 
+        #     rgb_image = height_image.rgb_image.copy()
+        #     rgb_image[surface_mask > 0] = (rgb_image[surface_mask > 0]/2) + [0, 127, 0] 
+
+        #####################################
+        # Select candidate object points
+
+        # Define the minimum height for a candidate object point
+        # min_object_height_m = 0.01
+        # min_obstacle_height_m = surface_height_m + min_object_height_m
+        # min_obstacle_height_pix = min_obstacle_height_m / m_per_unit
+
+        # Define the maximum height for a candidate object point
+        # robot_camera_height_m = 1.13 #from HeadScan in mapping.py and ManipulationView in manipulation_planning.py)
+        # voi_safety_margin_m = 0.02 
+        # max_object_height_m = 0.4
+        # max_obstacle_height_m = min(robot_camera_height_m - voi_safety_margin_m,
+        #                             surface_height_m + max_object_height_m)
+        # max_obstacle_height_pix = max_obstacle_height_m / m_per_unit
+
+        # Select candidate object points that are within the valid height range
+
+        min_obstacle_height_pix = 0.00001
+        max_obstacle_height_pix = 100000
+        obstacle_selector = (h_image > min_obstacle_height_pix) & (h_image < max_obstacle_height_pix)
+
+        # if display_on: 
+        #     rgb_image = height_image.rgb_image.copy()  # does not have rgb_image
+        #     # rgb_image[surface_mask > 0] = (rgb_image[surface_mask > 0]//2) + [0, 127, 0] 
+        #     rgb_image[obstacle_selector] = (rgb_image[obstacle_selector]//2) + [0, 0, 127] 
+        #     cv2.imshow('obstacles', rgb_image)
+        #     cv2.waitKey(0)
+        #     cv2.destroyAllWindows()
+        # obstacle_mask = np.uint8(obstacle_selector)
+
+        # if display_on: 
+        #     rgb_image = height_image.rgb_image.copy()
+        #     rgb_image[surface_mask > 0] = (rgb_image[surface_mask > 0]//2) + [0, 127, 0] 
+        #     rgb_image[obstacle_mask > 0] = (rgb_image[obstacle_mask > 0]//2) + [0, 0, 127] 
+
+        # Find the convex hull of the surface points to represent the full
+        # surface, overcoming occlusion holes, noise, and other phenomena.
+        # surface_convex_hull_mask = convex_hull_image(surface_mask)
+
+        # Select candidate object points that are both within the valid
+        # height range and on the surface
+        # obstacles_on_surface_selector = (obstacle_selector & surface_convex_hull_mask) 
+
+        obstacles_on_surface_selector = obstacle_selector
+
+        obstacles_on_surface = np.uint8(255.0 * obstacles_on_surface_selector)
+
+        # Dilate and erode the candidate object points to agglomerate
+        # object parts that might be separated due to occlusion, noise,
+        # and other phenomena.
+        # kernel_width_pix = 3 #3
+        # dilation_iterations = 15#5
+        # erosion_iterations = 12
+        # kernel_radius_pix = (kernel_width_pix - 1) // 2
+        # kernel = np.zeros((kernel_width_pix, kernel_width_pix), np.uint8)
+        # cv2.circle(kernel, (kernel_radius_pix, kernel_radius_pix), kernel_radius_pix, 255, -1)
+        # use_dilation = True
+        # if use_dilation:
+        #     obstacles_on_surface = cv2.dilate(obstacles_on_surface, kernel, iterations=dilation_iterations)
+        # use_erosion = True
+        # if use_erosion:
+        #     obstacles_on_surface = cv2.erode(obstacles_on_surface, kernel, iterations=erosion_iterations)
+
+        #####################################
+        # Process the candidate object points      
+            
+        # Treat connected components of candidate object points as objects. Fit ellipses to these segmented objects.
+        label_image, max_label_index = sk.measure.label(obstacles_on_surface, background=0, return_num=True, connectivity=2)
+        region_properties = sk.measure.regionprops(label_image, intensity_image=None, cache=True)
+        # if display_on:
+        #     rgb_image = height_image.rgb_image.copy()
+        #     color_label_image = sk.color.label2rgb(label_image, image=rgb_image, colors=None, alpha=0.3, bg_label=0, bg_color=(0, 0, 0), image_alpha=1, kind='overlay')
+        #     cv2.imshow('color_label_image', color_label_image)
+        #     cv2.waitKey(0)
+        #     cv2.destroyAllWindows()
+        # Proceed if an object was found.
+        if len(region_properties) > 0:
+
+            # Select the object with the largest area.
+            largest_region = None
+            largest_area = 0.0
+            for region in region_properties:
+                if region.area > largest_area:
+                    largest_region = region
+                    largest_area = region.area
+
+            # Make the object with the largest area the grasp target. In
+            # the future, other criteria could be used, such as the
+            # likelihood that the gripper can actually grasp the
+            # object. For example, the target object might be too large.
+            object_region = largest_region
+
+            # Collect and compute various features for the target object.
+            object_ellipse = self.get_ellipse(object_region)
+            object_area_m_sqr = object_region.area * pow(m_per_pix, 2)
+            min_row, min_col, max_row, max_col = object_region.bbox
+            object_bounding_box = {'min_row': min_row, 'min_col': min_col, 'max_row': max_row, 'max_col': max_col}
+
+            # Only compute height statistics using the original,
+            # high-confidence heights above the surface that are a part of
+            # the final object region.
+            object_selector = (label_image == object_region.label)
+            object_height_selector = obstacles_on_surface_selector & object_selector
+            # object_heights_m = (m_per_unit * h_image[object_height_selector]) - surface_height_m
+            object_heights_m = (m_per_unit * h_image[object_height_selector])
+            object_mean_height_m = np.mean(object_heights_m)
+            object_max_height_m = np.max(object_heights_m)
+            object_min_height_m = np.min(object_heights_m)
+
+            # if display_on:
+            #     print('object max height = {0} cm'.format(object_max_height_m * 100.0))
+            #     print('object mean height = {0} cm'.format(object_mean_height_m * 100.0))
+            #     rgb_image = height_image.rgb_image.copy()
+            #     #rgb_image[surface_convex_hull_mask > 0] = (rgb_image[surface_convex_hull_mask > 0]/2) + [0, 127, 0]
+            #     rgb_image[surface_convex_hull_mask > 0] = (rgb_image[surface_convex_hull_mask > 0]//2) + [0, 127, 0] 
+            #     rgb_image[label_image == object_region.label] = [0, 0, 255]
+            #     draw_ellipse_axes_from_region(rgb_image, largest_region, color=[255, 255, 255])
+            #     cv2.imshow('object to grasp', rgb_image)
+            #     cv2.waitKey(0)
+            #     cv2.destroyAllWindows()
+            # ellipse = {'centroid': centroid,
+            #            'minor': {'axis': minor_axis, 'length': r.minor_axis_length},
+            #            'major': {'axis': major_axis, 'length': r.major_axis_length, 'ang_rad': major_ang_rad}}
+
+            # Prepare grasp target information.
+            grasp_location_xy_pix = object_ellipse['centroid']
+            major_length_pix = object_ellipse['major']['length']
+            major_length_m = m_per_pix * major_length_pix
+            minor_length_pix = object_ellipse['minor']['length']
+            diff_m = m_per_pix * (major_length_pix - minor_length_pix)
+            if display_on:
+                print('object_ellipse =', object_ellipse)
+            max_gripper_aperture_m = 0.08
+            if (diff_m > 0.02) or (major_length_m > max_gripper_aperture_m):
+                grasp_elongated = True
+                grasp_width_pix = minor_length_pix
+                grasp_aperture_axis_pix = object_ellipse['minor']['axis']
+                grasp_long_axis_pix = object_ellipse['major']['axis']
+            else:
+                grasp_elongated = False
+                grasp_width_pix = major_length_pix
+                grasp_aperture_axis_pix = None
+                grasp_long_axis_pix = None
+
+            grasp_width_m = m_per_pix * grasp_width_pix
+
+            fingertip_diameter_m = 0.03
+            # grasp_location_above_surface_m = max(0.0, object_mean_height_m - (fingertip_diameter_m/2.0))
+            grasp_location_above_surface_m = max(0.0, object_mean_height_m + (fingertip_diameter_m/2.0))
+            grasp_location_z_pix = (grasp_location_above_surface_m / m_per_unit)
+            # grasp_location_z_pix = surface_height_pix + (grasp_location_above_surface_m / m_per_unit)
+
+            
+            max_object_height_above_surface_m = object_max_height_m
+            # Prepare grasp target information.
+            grasp_location_xy_pix = object_ellipse['centroid']
+            major_length_pix = object_ellipse['major']['length']
+            major_length_m = m_per_pix * major_length_pix
+            minor_length_pix = object_ellipse['minor']['length']
+            diff_m = m_per_pix * (major_length_pix - minor_length_pix)
+
+            grasp_target = {'location_xy_pix': grasp_location_xy_pix,
+                            'elongated': grasp_elongated,
+                            'width_pix' : grasp_width_pix,
+                            'width_m' : grasp_width_m,
+                            'aperture_axis_pix': grasp_aperture_axis_pix,
+                            'long_axis_pix': grasp_long_axis_pix,
+                            'location_above_surface_m': grasp_location_above_surface_m,
+                            'location_z_pix': grasp_location_z_pix,
+                            'object_max_height_above_surface_m': object_max_height_m,
+                            'surface_convex_hull_mask': None,
+                            'object_selector': object_selector,
+                            'object_ellipse': object_ellipse}
+
+            if display_on:
+                print('_________________________________')
+                print('grasp_target =')
+                print(grasp_target)
+                print('_________________________________')
+
+            return grasp_target
+
+    # def trigger_grasp_object_callback(self, request):
+    def trigger_grasp_object_callback(self):
+        joint_wrist_yaw_offset = 2.54
+        joint_wrist_pitch_offset = 0.30
+        # lift_offset = 0.1
         actually_move = True
         max_lift_m = 1.09
         min_extension_m = 0.01
@@ -113,21 +413,83 @@ class GraspObjectNode(hm.HelloNode):
             self.move_to_pose(pose)
 
             rospy.loginfo('Reorient the wrist.')
-            pose = {'joint_wrist_yaw': 0.0}
+            pose = {'joint_wrist_yaw': 0.0+joint_wrist_yaw_offset,
+                                'joint_wrist_pitch': -0.3+joint_wrist_pitch_offset,
+                                'joint_wrist_roll': -0.1}
             self.move_to_pose(pose)
-            
-        self.look_at_surface(scan_time_s = 3.0)
         
-        grasp_target = self.manipulation_view.get_grasp_target(self.tf2_buffer)
-        if grasp_target is None:
-            return TriggerResponse(
-                success=False,
-                message='Failed to find grasp target'
-            )
-        print("Grasp target")
-        # print(grasp_target)
-        input()
+        # print(self.)
+        # pose = {'joint_wrist_yaw': 3.00}
+        self.move_to_pose(pose)
+        
+        self.look_at_surface(scan_time_s = 3.0)
+        rospy.sleep(0.1)
+        while self.cup_pointcloud is None:
+            print('nsss')
+            continue
+        # input("CHECK")
+        # print(self.cup_pointcloud)
+        # input("Looked at surface")
+        
+        # grasp_target = self.manipulation_view.get_grasp_target(self.tf2_buffer)
+        # import pickle
+        # f = open('/home/strech/stretch_user/debug/grasp_target.pkl', 'rb')
+        # grasp_target = pickle.load(f)
+
+        ###load point cloud
+        # cloud_time = cup_pointcloud_msg.header.stamp
+        old_frame_id = self.cup_pointcloud.header.frame_id
+        
+        # How far to look ahead.
+        look_ahead_distance_m = 2.0
+        # Robot's width plus a safety margin.
+        look_to_side_distance_m = 1.3
+
+        m_per_pix = 0.006
+        pixel_dtype = np.uint8 
+
+        # stretch (based on HeadScan in mapping.py)
+        robot_head_above_ground = 1.13
+        lowest_distance_below_ground = 0.03
+        voi_height_m = robot_head_above_ground + lowest_distance_below_ground
+
+        robot_right_edge_m = 0.2
+        voi_side_x_m = 2.0 * look_to_side_distance_m
+        voi_side_y_m = look_ahead_distance_m
+        
+        voi_axes = np.identity(3)
+        voi_origin = np.array([-(voi_side_x_m/2.0), -(voi_side_y_m + robot_right_edge_m), -lowest_distance_below_ground])
+
+        # Define the VOI using the base_link frame
+        old_frame_id = 'base_link'
+
+        voi = rm.ROSVolumeOfInterest(old_frame_id, voi_origin, voi_axes, voi_side_x_m, voi_side_y_m, voi_height_m)
+
+        # Convert the VOI to the map frame to handle mobile base changes
+        new_frame_id = 'map'
+        lookup_time = rospy.Time(0) # return most recent transform
+        timeout_ros = rospy.Duration(0.1)
+        stamped_transform =  self.tf2_buffer.lookup_transform(new_frame_id, old_frame_id, lookup_time, timeout_ros)
+        points_in_old_frame_to_new_frame_mat = rn.numpify(stamped_transform.transform)
+        voi.change_frame(points_in_old_frame_to_new_frame_mat, new_frame_id)
+
+        self.cup_maxheight = rm.ROSMaxHeightImage(voi, m_per_pix, pixel_dtype)
+        xyz, pcl = self.update_cup(self.cup_pointcloud, self.tf2_buffer, proportion=0.75, reverse=1, axis=2)
+
+        grasp_target = self.find_cup_to_grasp(self.cup_maxheight)
+        
+        temp_cloud = create_cloud_xyz32(pcl.header, xyz.tolist())
+        self.point_cloud_pub.publish(temp_cloud)
+        # input("SEE PCL")
+
+        print("Grasp target is blanked?")
+        print(grasp_target)
+        # input()
         if grasp_target is not None: 
+            # import pickle
+            # f = open('/home/strech/stretch_user/debug/grasp_target.pkl', 'wb')
+            # pickle.dump(grasp_target, f)
+            # f.close()
             print(self.tf2_buffer)
             pregrasp_lift_m = self.manipulation_view.get_pregrasp_lift(grasp_target, self.tf2_buffer)
 
@@ -139,27 +501,32 @@ class GraspObjectNode(hm.HelloNode):
 
             if actually_move:
                 rospy.loginfo('Raise tool to pregrasp height.')
-                lift_to_pregrasp_m = max(self.lift_position + pregrasp_lift_m, 0.1)
+                lift_to_pregrasp_m = max(self.lift_position + pregrasp_lift_m +0.12, 0.1)
                 lift_to_pregrasp_m = min(lift_to_pregrasp_m, max_lift_m)
                 pose = {'joint_lift': lift_to_pregrasp_m}
                 self.move_to_pose(pose)
             print('Raise tool to pregrasp height.'+'='*50)
-            input()
+            # input()
             pregrasp_yaw = self.manipulation_view.get_pregrasp_yaw(grasp_target, self.tf2_buffer)
             print('pregrasp_yaw = {0:.2f} rad'.format(pregrasp_yaw))
             print('pregrasp_yaw = {0:.2f} deg'.format(pregrasp_yaw * (180.0/np.pi)))
 
             if actually_move:
                 rospy.loginfo('Rotate the gripper for grasping.')
-                pose = {'joint_wrist_yaw': pregrasp_yaw}
+                print(f"pregrasp yaw: {pregrasp_yaw}")
+                print(f"sum: {pregrasp_yaw+joint_wrist_yaw_offset}")
+                # input()
+                pose = {'joint_wrist_yaw': pregrasp_yaw+joint_wrist_yaw_offset}
+                # pose = {'joint_wrist_yaw': 3.5}
                 self.move_to_pose(pose)
                 
                 rospy.loginfo('Open the gripper.')
-                pose = {'gripper_aperture': 0.125}
+                pose = {'gripper_aperture': 1.0}
                 self.move_to_pose(pose)
 
             print('Rotate gripper for grasping.'+'='*20)
-            input()
+            # input()
+            rospy.sleep(1)
 
             pregrasp_mobile_base_m, pregrasp_wrist_extension_m = self.manipulation_view.get_pregrasp_planar_translation(grasp_target, self.tf2_buffer)
             
@@ -171,39 +538,43 @@ class GraspObjectNode(hm.HelloNode):
                 self.drive(pregrasp_mobile_base_m)
 
                 if pregrasp_wrist_extension_m > 0.0:
-                    extension_m = max(self.wrist_position + pregrasp_wrist_extension_m, min_extension_m)
+                    extension_m = max(self.wrist_position + pregrasp_wrist_extension_m+0.05, min_extension_m)
                     extension_m = min(extension_m, max_extension_m)
                     rospy.loginfo('Extend tool above surface.')
-                    pose = {'wrist_extension': extension_m} 
+                    pose = {'wrist_extension': extension_m+0.075} 
                     self.move_to_pose(pose)
                 else:
                     print('negative wrist extension for pregrasp, so not extending or retracting.')
 
             print('Drive to pregrasp location.'+'='*20)
-            input()
+            rospy.sleep(3)
+            # input()
             # return TriggerResponse(
             #     success=False,
             #     message='Failed to find grasp target'
             # )
 
             grasp_mobile_base_m, grasp_lift_m, grasp_wrist_extension_m = self.manipulation_view.get_grasp_from_pregrasp(grasp_target, self.tf2_buffer)
+            print(grasp_mobile_base_m)
+            # input("DRIVE FORWARD")
             print('='*20)
             print('grasp_mobile_base_m = {0:3f} m, grasp_lift_m = {1:3f} m, grasp_wrist_extension_m = {2:3f} m'.format(grasp_mobile_base_m, grasp_lift_m, grasp_wrist_extension_m))
 
             if actually_move: 
                 rospy.loginfo('Move the grasp pose from the pregrasp pose.')
 
-                lift_m = max(self.lift_position + grasp_lift_m, 0.1)
+                lift_m = max(self.lift_position + grasp_lift_m+0.075, 0.1)
                 lift_m = min(lift_m, max_lift_m)
                 
                 extension_m = max(self.wrist_position + grasp_wrist_extension_m, min_extension_m)
                 extension_m = min(extension_m, max_extension_m)
                 
                 pose = {'translate_mobile_base': grasp_mobile_base_m,
-                        'joint_lift': lift_m,  
-                        'wrist_extension': extension_m}
+                        'wrist_extension': extension_m+0.1}
                 self.move_to_pose(pose)
-
+                rospy.sleep(1)
+                pose = {'joint_lift': lift_m-0.015}
+                self.move_to_pose(pose)
                 rospy.loginfo('Attempt to close the gripper on the object.')
                 gripper_aperture_m = grasp_target['width_m'] - 0.18
                 pose = {'gripper_aperture': gripper_aperture_m}
@@ -230,7 +601,8 @@ class GraspObjectNode(hm.HelloNode):
             
 
             print('Attempt to move to grasp pose and close the gripper on the object.'+'='*20)
-            input()
+            rospy.sleep(1)
+            # input()
             
             if actually_move:
                 rospy.loginfo('Retract the tool.')
@@ -238,35 +610,115 @@ class GraspObjectNode(hm.HelloNode):
                 self.move_to_pose(pose)
 
                 rospy.loginfo('Reorient the wrist.')
-                pose = {'joint_wrist_yaw': 0.0}
+                pose = {'joint_wrist_yaw': 0.0+joint_wrist_yaw_offset}
                 self.move_to_pose(pose)
+
+        pose = {'translate_mobile_base': 0.9}
+        self.move_to_pose(pose)
+
+        pose = {'joint_lift': 0.80}
+        self.move_to_pose(pose)
+
+        pose = {'gripper_aperture': 1.0}
+        self.move_to_pose(pose)
+
+        pose = {'joint_wrist_pitch': -0.886+joint_wrist_pitch_offset}
+        self.move_to_pose(pose)
+
+        pose = {'joint_lift': 0.70}
+        self.move_to_pose(pose)
+
+        pose = {'gripper_aperture': 0.18}
+        self.move_to_pose(pose)
+        # pose = {'translate_mobile_base': -4.0}
+        # self.move_to_pose(pose)
 
         return TriggerResponse(
             success=True,
             message='Completed object grasp!'
             )
-
     
-    def main(self):
-        hm.HelloNode.main(self, 'grasp_object', 'grasp_object', wait_for_first_pointcloud=False)
+    
+        # self.updated = True
 
+    def change_frame(self, points_in_old_frame_to_new_frame_mat, points_in_voi_to_frame_id_mat, new_frame_id, origin, axes):
+        # Assumes the input matrix defines a rigid body transformation.
+        
+        # translate the origin
+        origin = list(origin)
+        origin.append(1.0)
+        origin = np.array(origin)
+        new_origin = np.matmul(points_in_old_frame_to_new_frame_mat, origin)
+        # rotate the axes
+        new_axes = np.matmul(points_in_old_frame_to_new_frame_mat[:3,:3], axes)
+        # transform transforms
+        new_points_in_voi_to_frame_id_mat = np.matmul(points_in_old_frame_to_new_frame_mat, points_in_voi_to_frame_id_mat)
+        new_points_in_frame_id_to_voi_mat = np.linalg.inv(new_points_in_voi_to_frame_id_mat)
+        # set
+
+        return new_origin, new_axes, new_points_in_voi_to_frame_id_mat, new_points_in_frame_id_to_voi_mat
+
+
+    def transform_to_kdl(self, t):
+        return PyKDL.Frame(PyKDL.Rotation.Quaternion(t.transform.rotation.x, t.transform.rotation.y,
+                                                  t.transform.rotation.z, t.transform.rotation.w),
+                        PyKDL.Vector(t.transform.translation.x, 
+                                     t.transform.translation.y, 
+                                     t.transform.translation.z))
+ 
+    # PointStamped
+    def do_transform_cloud(self, cloud, transform):
+        t_kdl = self.transform_to_kdl(transform)
+        points_out = []
+        for p_in in read_points(cloud):
+            p_out = t_kdl * PyKDL.Vector(p_in[0], p_in[1], p_in[2])
+            points_out.append((p_out[0], p_out[1], p_out[2]) + p_in[3:])
+        res = create_cloud(transform.header, cloud.fields, points_out)
+        return res
+
+    # def trigger_lower_until_contact_service_callback(self, request):
+    #     direction_sign = -1
+    #     lowest_allowed_m = 0.3
+    #     # success, message = self.lift_down_contact_detector.move_until_contact(
+    #     #     'joint_lift', lowest_allowed_m, direction_sign, self.move_to_pose)
+    #     success, message = True, 'yes'
+    #     return TriggerResponse(
+    #         success=success,
+    #         message=message
+    #     )
+        
+
+    def main(self):
+        print("IAM THERE")
+        # input()
+        hm.HelloNode.main(self, 'grasp_object', 'grasp_object', wait_for_first_pointcloud=False)
+        print('e'*50)
         self.debug_directory = rospy.get_param('~debug_directory')
         rospy.loginfo('Using the following directory for debugging files: {0}'.format(self.debug_directory))
 
 
         self.joint_states_subscriber = rospy.Subscriber('/stretch/joint_states', JointState, self.joint_states_callback)
-        
-        self.trigger_grasp_object_service = rospy.Service('/grasp_object/trigger_grasp_object',
-                                                           Trigger,
-                                                           self.trigger_grasp_object_callback)
+        print("IAM THERE1")
+        self.cup_pointcloud_subscriber = rospy.Subscriber('/yolov5/point_cloud2', PointCloud2, self.cup_pointcloud_callback)
 
+        self.transformed_pub = rospy.Publisher('/grasp_object/transformed', PointCloud2, queue_size=1)
+
+        # self.trigger_grasp_object_service = rospy.Service('/grasp_object/trigger_grasp_object',
+        #                                                    Trigger,
+        #                                                    self.trigger_grasp_object_callback)
+
+        # print(self.tf2_buffer['map'])
         rospy.wait_for_service('/funmap/trigger_reach_until_contact')
         rospy.loginfo('Node ' + self.node_name + ' connected to /funmap/trigger_reach_until_contact.')
         self.trigger_reach_until_contact_service = rospy.ServiceProxy('/funmap/trigger_reach_until_contact', Trigger)
-
+        print("IAM THERE2")
         rospy.wait_for_service('/funmap/trigger_lower_until_contact')
         rospy.loginfo('Node ' + self.node_name + ' connected to /funmap/trigger_lower_until_contact.')
         self.trigger_lower_until_contact_service = rospy.ServiceProxy('/funmap/trigger_lower_until_contact', Trigger)
+
+        # rospy.wait_for_service('trigger_lower_until_contact')
+        # rospy.loginfo('Node ' + self.node_name + ' connected to /funmap/trigger_lower_until_contact.')
+        # self.trigger_lower_until_contact_service = rospy.ServiceProxy('trigger_lower_until_contact', Trigger)
 
         default_service = '/camera/switch_to_default_mode'
         high_accuracy_service = '/camera/switch_to_high_accuracy_mode'
@@ -277,10 +729,14 @@ class GraspObjectNode(hm.HelloNode):
         rospy.wait_for_service(high_accuracy_service)
         rospy.loginfo('Node ' + self.node_name + ' connected to'  + high_accuracy_service)
         self.trigger_d435i_high_accuracy_mode_service = rospy.ServiceProxy(high_accuracy_service, Trigger)
+        print("IAM HERE")
         
-        rate = rospy.Rate(self.rate)
-        while not rospy.is_shutdown():
-            rate.sleep()
+        self.trigger_grasp_object_callback()
+        
+        # rate = rospy.Rate(self.rate)
+        # while not rospy.is_shutdown():
+            # rate.sleep()
+        quit()
 
         
 if __name__ == '__main__':

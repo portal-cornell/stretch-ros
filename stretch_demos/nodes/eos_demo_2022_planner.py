@@ -73,48 +73,65 @@ if __name__ == '__main__':
     planner = DemoPlanner()
 
     # Declare a `StretchNavigation` object
-    nav = StretchNavigation()
+    # nav = StretchNavigation()
 
-    joint_mover = JointMover()
+    # joint_mover = JointMover()
+
+    base_mover = Move()
+
+    flag = True
+    count = 0
+    # while flag:
+    #     base_mover.move_x(1.0)
+    #     check = input('s')
+    #     if check == 's': flag = False
+    #     count += 1
+    # print("count", count)
+
+    while count < 50:
+        print(count)
+        base_mover.move_x(1.0)
+        time.sleep(0.5)
+        count += 1
 
     """RESET ARM ONLY"""
     # joint_mover.reset_arm()
     """RESET ARM ONLY"""
     
-    nav.go_to(TABLE, planner.done_callback("went_to_table"))  # go roughly to the table
-
-    input("waiting to start grasp node launch file")
-
-    p = subprocess.Popen(["roslaunch", "stretch_demos", "grasp_object_demo_2022.launch"])
-
-    input("started the grasp node launch file")
-
-    os.kill(p.pid, signal.SIGINT)
-
-    input("killed the grasp node launch file")
-
-    nav.go_to(MOVE_WITH_CART_POSE, planner.done_callback("pos_ready_for_cart"))
+    # nav.go_to((-0.397, 0.024, -1.0), planner.done_callback("went_to_table"))  # go roughly to the table
     
-    joint_mover.lift_arm_before_extend()
+    # input("waiting to start grasp node launch file")
 
-    time.sleep(3)
+    # p = subprocess.Popen(["roslaunch", "stretch_demos", "grasp_object_demo_2022.launch"])
 
-    joint_mover.extend_arm_over_cart()
+    # input("started the grasp node launch file")
 
-    time.sleep(2.5)
+    # os.kill(p.pid, signal.SIGINT)
 
-    """Need to test the time"""
-    joint_mover.open_gripper()
+    # input("killed the grasp node launch file")
 
-    time.sleep(2)
+    # nav.go_to(MOVE_WITH_CART_POSE, planner.done_callback("pos_ready_for_cart"))
+    
+    # joint_mover.lift_arm_before_extend()
 
-    joint_mover.rotate_wrist_before_latching_cart()
+    # time.sleep(3)
 
-    time.sleep(2)
-    """Need to test the time"""
+    # joint_mover.extend_arm_over_cart()
 
-    joint_mover.lower_arm_to_cart()
+    # time.sleep(2.5)
 
-    time.sleep(2)
+    # """Need to test the time"""
+    # joint_mover.open_gripper()
 
-    nav.go_to(HOME, planner.done_callback("went_back_home"))  # go roughly to the table
+    # time.sleep(2)
+
+    # joint_mover.rotate_wrist_before_latching_cart()
+
+    # time.sleep(2)
+    # """Need to test the time"""
+
+    # joint_mover.lower_arm_to_cart()
+
+    # time.sleep(2)
+
+    # nav.go_to(HOME, planner.done_callback("went_back_home"))  # go roughly to the table

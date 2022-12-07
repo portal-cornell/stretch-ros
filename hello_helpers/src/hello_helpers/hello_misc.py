@@ -138,15 +138,17 @@ class HelloNode:
 
 
     def main(self, node_name, node_topic_namespace, wait_for_first_pointcloud=True):
+        print('e'*20)
         rospy.init_node(node_name)
         self.node_name = rospy.get_name()
         rospy.loginfo("{0} started".format(self.node_name))
-
+        print('a'*50)
         self.trajectory_client = actionlib.SimpleActionClient('/stretch_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
-        server_reached = self.trajectory_client.wait_for_server(timeout=rospy.Duration(60.0))
+        server_reached = self.trajectory_client.wait_for_server(timeout=rospy.Duration(2.0))
         if not server_reached:
             rospy.signal_shutdown('Unable to connect to arm action server. Timeout exceeded.')
             sys.exit()
+        print('b'*50)
         
         self.tf2_buffer = tf2_ros.Buffer()
         self.tf2_listener = tf2_ros.TransformListener(self.tf2_buffer)
@@ -154,10 +156,11 @@ class HelloNode:
         self.point_cloud_subscriber = rospy.Subscriber('/camera/depth/color/points', PointCloud2, self.point_cloud_callback)
         self.point_cloud_pub = rospy.Publisher('/' + node_topic_namespace + '/point_cloud2', PointCloud2, queue_size=1)
 
+        print('e'*50)
         rospy.wait_for_service('/stop_the_robot')
         rospy.loginfo('Node ' + self.node_name + ' connected to /stop_the_robot service.')
         self.stop_the_robot_service = rospy.ServiceProxy('/stop_the_robot', Trigger)
-        
+        print('f'*50)
         if wait_for_first_pointcloud:
             # Do not start until a point cloud has been received
             point_cloud_msg = self.point_cloud
