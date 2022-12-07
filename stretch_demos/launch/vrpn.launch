@@ -1,5 +1,5 @@
 <launch>
-  <arg name="server" default="192.168.0.221"/>
+  <arg name="server" default="192.168.0.207"/>
   <node pkg="vrpn_client_ros" type="vrpn_client_node" name="vrpn_client_node" output="screen">
     <rosparam subst_value="true">
       server: $(arg server)
