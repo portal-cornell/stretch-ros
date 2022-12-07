@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import numpy as np
 import argparse as ap
 import rospy
 from std_msgs.msg import String
@@ -19,34 +20,30 @@ p1 = None
 p2 = None
 p3 = None
 
-import numpy as np
+
 def euler_to_quaternion(euler):
     roll, pitch, yaw = euler
-    qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
-    qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
-    qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
-    qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+    qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - \
+        np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+    qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + \
+        np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
+    qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - \
+        np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
+    qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + \
+        np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
     return [qx, qy, qz, qw]
+
 
 class ArmNode():
 
     def __init__(self):
         pass
-        # self.x1 = p1.x
-        # self.y1 = p1.y
-        # self.z1 = p1.z
-        # self.x2 = p2.x
-        # self.y2 = p2.y
-        # self.z2 = p2.z
-        # self.x3 = p3.x
-        # self.y3 = p3.y
-        # self.z3 = p3.z
 
     def distance(self, p1, p2):
         dist = (p1.x-p2.x)**2+(p1.y-p2.y)**2+(p1.z-p2.z)**2
         return math.sqrt(dist)
 
-    def create_line_segment(self, p1, p2, idxs = "0123"):
+    def create_line_segment(self, p1, p2):
         markerArray = MarkerArray()
         count = 0
 
@@ -92,91 +89,17 @@ class ArmNode():
 
         cylinder = Marker()
         cylinder.id = count
-        # cylinder.lifetime = rospy.Duration()
         cylinder.header.stamp = rospy.Time.now()
         cylinder.header.frame_id = "map"
         cylinder.type = cylinder.ARROW
-        # cylinder.action = cylinder.ADD
         cylinder.scale.x = 0.05
         cylinder.scale.y = 0
         cylinder.scale.z = 0
-        # print(self.distance(p1,p2))
-        # input('DIST')
-        # cylinder.pose.orientation.w = 1.0
-
-        # equation of the license
-        # # cos alpha x + cos beta * y + cos gamma * z = 1
-        # alpha = math.acos((p2.x-p1.x)/self.distance(p1, p2))
-        # beta = math.acos((p2.z-p1.z)/self.distance(p1, p2))
-        # gamma = math.acos((p2.y-p1.y)/self.distance(p1, p2))
-
-        # euler = [alpha, beta, gamma]
-        # norm = 0
-        # for a in euler:
-        #     norm += np.cos(a)**2
-        # print(norm)
-        # euler = [0, 0, 1]
-
-        # quarternion = euler_to_quaternion(euler)
-        # cylinder.pose.position.x = (p1.x+p2.x)/2.0
-        # cylinder.pose.position.y = (p1.y+p2.y)/2.0
-        # cylinder.pose.position.z = (p1.z+p2.z)/2.0
         cylinder.points = [p1, p2]
         cylinder.color.r = 1.0
         cylinder.color.a = 1.0
         count += 1
         markerArray.markers.append(cylinder)
-
-        # cylinder = Marker()
-        # cylinder.id = count
-        # # cylinder.lifetime = rospy.Duration()
-        # cylinder.header.stamp = rospy.Time.now()
-        # cylinder.header.frame_id = "map"
-        # cylinder.type = cylinder.CYLINDER
-        # # cylinder.action = cylinder.ADD
-        # cylinder.scale.x = 0.04
-        # cylinder.scale.y = 0.04
-        # cylinder.scale.z = self.distance(p1, p2)
-        # # print(self.distance(p1,p2))
-        # # input('DIST')
-        # # cylinder.pose.orientation.w = 1.0
-
-        # # equation of the license
-        # # cos alpha x + cos beta * y + cos gamma * z = 1
-        # alpha = math.acos((p2.x-p1.x)/self.distance(p1, p2))
-        # beta = math.acos((p2.z-p1.z)/self.distance(p1, p2))
-        # gamma = math.acos((p2.y-p1.y)/self.distance(p1, p2))
-
-        # euler = [alpha, beta, gamma]
-        # norm = 0
-        # for a in euler:
-        #     norm += np.cos(a)**2
-        # print(norm)
-        # # euler = [0, 0, 1]
-
-        # quarternion = euler_to_quaternion(euler)
-        # xyz = n
-
-        
-        
-        # cylinder.pose.orientation.x = quarternion[0]
-        # cylinder.pose.orientation.y = quarternion[1]
-        # cylinder.pose.orientation.z = quarternion[2]
-        # cylinder.pose.orientation.w = quarternion[3]
-
-
-        # cylinder.pose.position.x = (p1.x+p2.x)/2.0
-        # cylinder.pose.position.y = (p1.z+p2.z)/2.0
-        # cylinder.pose.position.z = (p1.y+p2.y)/2.0
-        # cylinder.pose.orientation.x = quarternion[int(idxs[0])]
-        # cylinder.pose.orientation.y = quarternion[int(idxs[1])]
-        # cylinder.pose.orientation.z = quarternion[int(idxs[2])]
-        # cylinder.pose.orientation.w = quarternion[int(idxs[3])]
-        # cylinder.color.r = 1.0
-        # cylinder.color.a = 1.0
-        # count += 1
-
-        # markerArray.markers.append(cylinder)
 
         return markerArray
 
@@ -212,20 +135,10 @@ class ArmNode():
         while not rospy.is_shutdown():
             if p1 is None or p3 is None or p2 is None:
                 continue
-            # print(p1)
-            # flag = True
-            # while flag:
-            # idxs = input("Enter idxs")
-            idxs = "1230"
-            wrist_to_elbow = self.create_line_segment(p1, p2, idxs = idxs)
-            # rospy.loginfo(wrist_to_elbow)
-            # print(wrist_to_elbow)
-            # input()
-
+            wrist_to_elbow = self.create_line_segment(p1, p2)
             wrist_to_elbow_publisher.publish(wrist_to_elbow)
-            elbow_to_shoulder = self.create_line_segment(p2, p3,idxs = idxs)
-            # rospy.loginfo(elbow_to_shoulder)
-            elbow_to_shoulder_publisher.publish(elbow_to_shoulder) 
+            elbow_to_shoulder = self.create_line_segment(p2, p3)
+            elbow_to_shoulder_publisher.publish(elbow_to_shoulder)
             rate.sleep()
 
 
