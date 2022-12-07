@@ -19,7 +19,7 @@
   <!-- -->
   
   <!-- VISUALIZE -->
-  <node name="rviz" pkg="rviz" type="rviz" output="log" args="-d $(find stretch_navigation)/rviz/navigation.rviz" if="$(arg rviz)" />
+  <node name="rviz" pkg="rviz" type="rviz" output="log" args="-d $(find stretch_learning)/rviz/open_drawer.rviz" if="$(arg rviz)" />
   <!-- -->
 
 </launch>
