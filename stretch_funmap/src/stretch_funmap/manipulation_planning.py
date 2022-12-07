@@ -628,7 +628,7 @@ class ManipulationView():
 
         # target distance from yaw joint axis to the object grasp
         # location
-        grasp_target_dist_m = -0.17
+        grasp_target_dist_m = -0.15
         grasp_target_dist_pix = grasp_target_dist_m / m_per_pix
         grasp_target_xy_pix = (grasp_target_dist_pix * gripper_forward_pix) + grasp_target['location_xy_pix']
         

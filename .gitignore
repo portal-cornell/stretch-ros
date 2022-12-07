@@ -19,3 +19,5 @@ stretch_description/urdf/exported_urdf_previous/*
 stretch_funmap/src/stretch_funmap/cython_min_cost_path.c
 stretch_learning/checkpoints/
 stretch_learning/nodes/r3m/
+
+.vscode/*

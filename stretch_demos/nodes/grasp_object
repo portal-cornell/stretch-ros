@@ -398,7 +398,7 @@ class GraspObjectNode(hm.HelloNode):
         actually_move = True
         max_lift_m = 1.09
         min_extension_m = 0.01
-        max_extension_m = 0.5
+        max_extension_m = 0.6
         
         use_default_mode = False
         if use_default_mode: 
@@ -474,7 +474,7 @@ class GraspObjectNode(hm.HelloNode):
         voi.change_frame(points_in_old_frame_to_new_frame_mat, new_frame_id)
 
         self.cup_maxheight = rm.ROSMaxHeightImage(voi, m_per_pix, pixel_dtype)
-        xyz, pcl = self.update_cup(self.cup_pointcloud, self.tf2_buffer, proportion=0.75, reverse=1, axis=2)
+        xyz, pcl = self.update_cup(self.cup_pointcloud, self.tf2_buffer, proportion=0.80, reverse=1, axis=2)
 
         grasp_target = self.find_cup_to_grasp(self.cup_maxheight)
         
@@ -501,7 +501,7 @@ class GraspObjectNode(hm.HelloNode):
 
             if actually_move:
                 rospy.loginfo('Raise tool to pregrasp height.')
-                lift_to_pregrasp_m = max(self.lift_position + pregrasp_lift_m +0.12, 0.1)
+                lift_to_pregrasp_m = max(self.lift_position + pregrasp_lift_m +0.11, 0.1)
                 lift_to_pregrasp_m = min(lift_to_pregrasp_m, max_lift_m)
                 pose = {'joint_lift': lift_to_pregrasp_m}
                 self.move_to_pose(pose)
@@ -538,7 +538,7 @@ class GraspObjectNode(hm.HelloNode):
                 self.drive(pregrasp_mobile_base_m)
 
                 if pregrasp_wrist_extension_m > 0.0:
-                    extension_m = max(self.wrist_position + pregrasp_wrist_extension_m+0.05, min_extension_m)
+                    extension_m = max(self.wrist_position + pregrasp_wrist_extension_m+0.075, min_extension_m)
                     extension_m = min(extension_m, max_extension_m)
                     rospy.loginfo('Extend tool above surface.')
                     pose = {'wrist_extension': extension_m+0.075} 
@@ -563,14 +563,14 @@ class GraspObjectNode(hm.HelloNode):
             if actually_move: 
                 rospy.loginfo('Move the grasp pose from the pregrasp pose.')
 
-                lift_m = max(self.lift_position + grasp_lift_m+0.075, 0.1)
+                lift_m = max(self.lift_position + grasp_lift_m+0.08, 0.1)
                 lift_m = min(lift_m, max_lift_m)
                 
                 extension_m = max(self.wrist_position + grasp_wrist_extension_m, min_extension_m)
                 extension_m = min(extension_m, max_extension_m)
                 
                 pose = {'translate_mobile_base': grasp_mobile_base_m,
-                        'wrist_extension': extension_m+0.1}
+                        'wrist_extension': extension_m+0.08}
                 self.move_to_pose(pose)
                 rospy.sleep(1)
                 pose = {'joint_lift': lift_m-0.015}
@@ -621,6 +621,8 @@ class GraspObjectNode(hm.HelloNode):
 
         pose = {'gripper_aperture': 1.0}
         self.move_to_pose(pose)
+        pose = {'gripper_aperture': 0.5}
+        self.move_to_pose(pose)
 
         pose = {'joint_wrist_pitch': -0.886+joint_wrist_pitch_offset}
         self.move_to_pose(pose)
@@ -628,8 +630,8 @@ class GraspObjectNode(hm.HelloNode):
         pose = {'joint_lift': 0.70}
         self.move_to_pose(pose)
 
-        pose = {'gripper_aperture': 0.18}
-        self.move_to_pose(pose)
+        # pose = {'gripper_aperture': 0.0}
+        # self.move_to_pose(pose)
         # pose = {'translate_mobile_base': -4.0}
         # self.move_to_pose(pose)
 
