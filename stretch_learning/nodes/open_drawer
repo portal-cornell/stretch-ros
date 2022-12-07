@@ -45,7 +45,7 @@ class OpenDrawer(hm.HelloNode):
                                     transforms.CenterCrop(224),
                                     transforms.ToTensor(),
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])            
-        ckpt_path = Path("~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/last.ckpt").expanduser()
+        ckpt_path = Path("~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/r3m.ckpt").expanduser()
         self.model = BC.load_from_checkpoint(ckpt_path)
 
     def joint_states_callback(self, msg):
@@ -53,7 +53,20 @@ class OpenDrawer(hm.HelloNode):
         js_msg = list(zip(msg.name, msg.position, msg.velocity, msg.effort))
         js_msg = sorted(js_msg, key=lambda x: x[0])
         js_arr = []
-        for (_, pos, vel, eff) in js_msg:
+        for idx, (name, pos, vel, eff) in enumerate(js_msg):
+            if name == 'joint_wrist_yaw': 
+                # print(pos)
+                # print('ya')
+                pos-=2.54
+                pos = 0.0
+            if name == 'joint_wrist_pitch': 
+                # print(pos)
+                # print('pit')
+                pos-=0.245
+                pos = -0.85
+            # if name == 'joint_arm_l0':
+            #     print("idx", idx)
+                # input()
             js_arr.extend([pos, vel, eff])
         joint_states = torch.from_numpy(np.array(js_arr, dtype=np.float32))
         self.joint_states_data = joint_states.unsqueeze(0)
@@ -221,11 +234,31 @@ class OpenDrawer(hm.HelloNode):
         self.rgb_image_subscriber.registerCallback(self.image_callback)
 
         rate = rospy.Rate(self.rate)
+        nudge_amount = 4
+        wait_amount = 100
         while not rospy.is_shutdown():
             if self.joint_states is not None and self.rbg_image is not None:
                 prediction = self.model(self.rbg_image, self.joint_states_data)
                 keypressed_index = torch.argmax(prediction).item()
                 keypressed = self.index_to_keypressed(keypressed_index)
+                print(self.joint_states_data.shape)
+                print(self.joint_states_data[0,27])
+                if self.joint_states_data[0,27] > 0.97 and nudge_amount:
+                    print("HERE")
+                    rospy.sleep(1)
+                    self.send_command(self.get_command('w'))
+                    rospy.sleep(0.1)
+                    nudge_amount=0
+                    nudge_amount = 0
+                    # nudge_amount -=1
+                    continue
+                if self.joint_states_data[0,3] > 0.050 and wait_amount:
+                    print("YOPOOOOOOOOOOOOOo")
+                    # input()
+                    rospy.sleep(2)
+                    wait_amount = 0
+                    self.send_command(self.get_command('2'))
+                    rospy.sleep(0.1)
                 command = self.get_command(keypressed)
                 print(f'{rospy.Time().now()}, {keypressed_index=}, {command=}')
                 self.send_command(command)
