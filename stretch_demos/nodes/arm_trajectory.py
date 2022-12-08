@@ -37,17 +37,17 @@ def euler_to_quaternion(euler):
 def transform(p):
     import copy
     q = copy.deepcopy(p)
-    q.z = p.y-0.05
-    q.x = p.x
-    q.y = p.z
+    q.z = p.y
+    q.x = -p.x+1.5
+    q.y = p.z-0.5
 
     return q
 
 
-def createSphere(p, scale = 0.075, id = 0):
+def createSphere(p, scale = 0.075):
     global count
     marker = Marker()
-    marker.id = id
+    marker.id = count
     marker.lifetime = rospy.Duration()
     marker.header.frame_id = "map"
     marker.type = marker.SPHERE
@@ -65,10 +65,10 @@ def createSphere(p, scale = 0.075, id = 0):
     count += 1
     return marker
 
-def createArrow(p1, p2, scale = 0.05, id = 0):
+def createArrow(p1, p2, scale = 0.05):
     global count
     marker = Marker()
-    marker.id = id
+    marker.id = count
     marker.lifetime = rospy.Duration()
     marker.header.frame_id = "map"
     marker.type = marker.ARROW
@@ -92,19 +92,19 @@ class ArmNode():
         dist = (p1.x-p2.x)**2+(p1.y-p2.y)**2+(p1.z-p2.z)**2
         return math.sqrt(dist)
 
-    def create_line_segment(self, p1, p2, scale = 0.05, id = 0):
+    def create_line_segment(self, p1, p2, scale = 0.05):
         markerArray = MarkerArray()
         count = 0
 
-        marker1 = createSphere(p1, id = id*3)
+        marker1 = createSphere(p1)
         markerArray.markers.append(marker1)
         count += 1
 
-        marker2 = createSphere(p2,id = id*3+1)
+        marker2 = createSphere(p2)
         markerArray.markers.append(marker2)
         count += 1
 
-        cylinder = createArrow(p1, p2, scale = scale,id = id*3+2)
+        cylinder = createArrow(p1, p2, scale = scale)
         count += 1
         markerArray.markers.append(cylinder)
 
@@ -112,19 +112,13 @@ class ArmNode():
 
     def callback1(self, data):
         global p1
-        global p2
-        global p3
         p1 = transform(data.pose.position)
 
     def callback2(self, data):
-        global p1
         global p2
-        global p3
         p2 = transform(data.pose.position)
 
     def callback3(self, data):
-        global p1
-        global p2
         global p3
         p3 = transform(data.pose.position)
 
@@ -148,9 +142,9 @@ class ArmNode():
         while not rospy.is_shutdown():
             if p1 is None or p3 is None or p2 is None:
                 continue
-            wrist_to_elbow = self.create_line_segment(p1, p2, scale = 0.05, id = 0)
+            wrist_to_elbow = self.create_line_segment(p1, p2, scale = 0.05)
             wrist_to_elbow_publisher.publish(wrist_to_elbow)
-            elbow_to_shoulder = self.create_line_segment(p2, p3, scale = 0.08, id = 1)
+            elbow_to_shoulder = self.create_line_segment(p2, p3, scale = 0.07)
             elbow_to_shoulder_publisher.publish(elbow_to_shoulder)
             rate.sleep()
 
