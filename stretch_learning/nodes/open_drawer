@@ -259,7 +259,7 @@ class OpenDrawer(hm.HelloNode):
                     rospy.sleep(2)
                     wait_amount = 0
                     self.send_command(self.get_command('2'))
-                    rospy.sleep(0.1)
+                    rospy.sleep(0.25)
                 command = self.get_command(keypressed)
                 print(f'{rospy.Time().now()}, {keypressed_index=}, {command=}')
                 self.send_command(command)
