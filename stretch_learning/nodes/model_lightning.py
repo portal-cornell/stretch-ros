@@ -24,6 +24,7 @@ class BC(pl.LightningModule):
             resnet18.fc = nn.Linear(resnet18.fc.in_features, 512)
             self.conv_net = resnet18
         self.conv_net_name = "R3M" if use_r3m else "ResNet18"
+        # joint_state_dims = int(joint_state_dims * 2/3)
         self.fc1 = nn.Linear(512 + joint_state_dims, 256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, state_action_dims)

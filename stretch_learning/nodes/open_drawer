@@ -68,6 +68,7 @@ class OpenDrawer(hm.HelloNode):
             #     print("idx", idx)
                 # input()
             js_arr.extend([pos, vel, eff])
+            # js_arr.extend([pos, eff])
         joint_states = torch.from_numpy(np.array(js_arr, dtype=np.float32))
         self.joint_states_data = joint_states.unsqueeze(0)
 
