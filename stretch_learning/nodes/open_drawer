@@ -17,6 +17,11 @@ import numpy as np
 from torchvision import transforms
 from cv_bridge import CvBridge, CvBridgeError
 
+from iql.src.iql import ImplicitQLearning
+from iql.src.value_functions import TwinQ, ValueFunction
+from iql.src.policy import GaussianPolicy
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class OpenDrawer(hm.HelloNode):
     def __init__(self):
@@ -45,8 +50,30 @@ class OpenDrawer(hm.HelloNode):
                                     transforms.CenterCrop(224),
                                     transforms.ToTensor(),
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])            
-        ckpt_path = Path("~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/no_corrections.ckpt").expanduser()
-        self.model = BC.load_from_checkpoint(ckpt_path)
+        ckpt_name = "iql_subdom"
+        ckpt_path = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/{ckpt_name}.ckpt").expanduser()
+        self.is_iql = "corrections" in ckpt_name
+        
+        if self.is_iql: 
+            obs_dim, act_dim = 554, 4
+            hidden_dim, n_hidden = 256, 2
+            learning_rate = 3e-4
+            n_steps, tau, beta, alpha, discount = 1000, 0.7, 3.0, 0.005, 0.99
+            policy = GaussianPolicy(obs_dim, act_dim, hidden_dim=hidden_dim, n_hidden=n_hidden)
+            self.model = ImplicitQLearning(
+                qf=TwinQ(obs_dim, act_dim, hidden_dim=hidden_dim, n_hidden=n_hidden),
+                vf=ValueFunction(obs_dim, hidden_dim=hidden_dim, n_hidden=n_hidden),
+                policy=policy,
+                optimizer_factory=lambda params: torch.optim.Adam(params, lr=learning_rate),
+                max_steps=n_steps,
+                tau=tau,
+                beta=beta,
+                alpha=alpha,
+                discount=discount
+            )
+            self.model.load_state_dict(torch.load(str(ckpt_path), map_location=torch.device(device)))
+        else:
+            self.model = BC.load_from_checkpoint(ckpt_path)
 
     def joint_states_callback(self, msg):
         self.joint_states = msg
@@ -225,6 +252,13 @@ class OpenDrawer(hm.HelloNode):
             trajectory_goal.trajectory.header.stamp = rospy.Time.now()
             self.trajectory_client.send_goal(trajectory_goal)
 
+    def torchify(self, x):
+        x = torch.from_numpy(x)
+        if x.dtype is torch.float64:
+            x = x.float()
+        x = x.to(device=device)
+        return x
+
     def main(self):
         rospy.init_node("open_drawer_bc")
         self.node_name = rospy.get_name()
@@ -239,27 +273,32 @@ class OpenDrawer(hm.HelloNode):
         wait_amount = 100
         while not rospy.is_shutdown():
             if self.joint_states is not None and self.rbg_image is not None:
-                prediction = self.model(self.rbg_image, self.joint_states_data)
-                keypressed_index = torch.argmax(prediction).item()
+                if self.is_iql:
+                    obs = np.concatenate((self.joint_states_data, self.rbg_image))
+                    obs = self.torchify(obs)
+                    keypressed_index = torch.argmax(self.model.policy.act(obs)).item()
+                else:
+                    prediction = self.model(self.rbg_image, self.joint_states_data)
+                    keypressed_index = torch.argmax(prediction).item()
                 keypressed = self.index_to_keypressed(keypressed_index)
-                print(self.joint_states_data.shape)
-                print(self.joint_states_data[0,27])
-                if self.joint_states_data[0,27] > 0.97 and nudge_amount:
-                    print("HERE")
-                    rospy.sleep(1)
-                    self.send_command(self.get_command('w'))
-                    rospy.sleep(0.1)
-                    nudge_amount=0
-                    nudge_amount = 0
-                    # nudge_amount -=1
-                    continue
-                if self.joint_states_data[0,3] > 0.050 and wait_amount:
-                    print("YOPOOOOOOOOOOOOOo")
-                    # input()
-                    rospy.sleep(2)
-                    wait_amount = 0
-                    self.send_command(self.get_command('2'))
-                    rospy.sleep(0.25)
+                # print(self.joint_states_data.shape)
+                # print(self.joint_states_data[0,27])
+                # if self.joint_states_data[0,27] > 0.97 and nudge_amount:
+                #     print("HERE")
+                #     rospy.sleep(1)
+                #     self.send_command(self.get_command('w'))
+                #     rospy.sleep(0.1)
+                #     nudge_amount=0
+                #     nudge_amount = 0
+                #     # nudge_amount -=1
+                #     continue
+                # if self.joint_states_data[0,3] > 0.050 and wait_amount:
+                #     print("YOPOOOOOOOOOOOOOo")
+                #     # input()
+                #     rospy.sleep(2)
+                #     wait_amount = 0
+                #     self.send_command(self.get_command('2'))
+                #     rospy.sleep(0.25)
                 command = self.get_command(keypressed)
                 print(f'{rospy.Time().now()}, {keypressed_index=}, {command=}')
                 self.send_command(command)
