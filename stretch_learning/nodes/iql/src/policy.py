@@ -16,7 +16,8 @@ class GaussianPolicy(nn.Module):
         self.log_std = nn.Parameter(torch.zeros(act_dim, dtype=torch.float32))
 
     def forward(self, obs):
-        mean = self.net(obs)
+        # mean = self.net(obs)
+        mean = torch.tanh(self.net(obs))
         std = torch.exp(self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX))
         scale_tril = torch.diag(std)
         return MultivariateNormal(mean, scale_tril=scale_tril)

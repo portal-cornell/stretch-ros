@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import StepLR
 
 from .util import DEFAULT_DEVICE, compute_batched, update_exponential_moving_average
 
@@ -27,6 +28,7 @@ class ImplicitQLearning(nn.Module):
         self.q_optimizer = optimizer_factory(self.qf.parameters())
         self.policy_optimizer = optimizer_factory(self.policy.parameters())
         self.policy_lr_schedule = CosineAnnealingLR(self.policy_optimizer, max_steps)
+        # self.policy_lr_schedule = StepLR(self.policy_optimizer, step_size=max_steps//10, gamma=0.1)
         self.tau = tau
         self.beta = beta
         self.discount = discount

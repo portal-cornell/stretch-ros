@@ -6,13 +6,17 @@ import random
 import string
 import sys
 
+import math
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
-
+from itertools import chain
+from utils.common import DATA_DIR, OVERSHOOT_ROLLOUTS_DIR, LEARNER_ROLLOUTS_DIR
+from PIL import Image
+from utils.common import calculate_y_pos
 
 DEFAULT_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
 
 class Squeeze(nn.Module):
     def __init__(self, dim=None):
@@ -21,7 +25,6 @@ class Squeeze(nn.Module):
 
     def forward(self, x):
         return x.squeeze(dim=self.dim)
-
 
 def mlp(dims, activation=nn.ReLU, output_activation=None, squeeze_output=False):
     n_dims = len(dims)
@@ -41,15 +44,12 @@ def mlp(dims, activation=nn.ReLU, output_activation=None, squeeze_output=False):
     net.to(dtype=torch.float32)
     return net
 
-
 def compute_batched(f, xs):
     return f(torch.cat(xs, dim=0)).split([len(x) for x in xs])
-
 
 def update_exponential_moving_average(target, source, alpha):
     for target_param, source_param in zip(target.parameters(), source.parameters()):
         target_param.data.mul_(1. - alpha).add_(source_param.data, alpha=alpha)
-
 
 def torchify(x):
     x = torch.from_numpy(x)
@@ -57,8 +57,6 @@ def torchify(x):
         x = x.float()
     x = x.to(device=DEFAULT_DEVICE)
     return x
-
-
 
 def return_range(dataset, max_episode_steps):
     returns, lengths = [], []
@@ -75,7 +73,6 @@ def return_range(dataset, max_episode_steps):
     assert sum(lengths) == len(dataset['rewards'])
     return min(returns), max(returns)
 
-
 # dataset is a dict, values of which are tensors of same first dimension
 def sample_batch(dataset, batch_size):
     k = list(dataset.keys())[0]
@@ -85,21 +82,50 @@ def sample_batch(dataset, batch_size):
     indices = torch.randint(low=0, high=n, size=(batch_size,), device=device)
     return {k: v[indices] for k, v in dataset.items()}
 
+def evaluate_policy(policy, n_simul, x_pos_avg, y_pos_avg, csv_to_imgs):
+    # take first time key is pressed
+    csvs = [csv for csv in LEARNER_ROLLOUTS_DIR.glob("*.csv")]
+    rewards = []    
+    sim_rounds, keep_simulating = 0, True
+    while keep_simulating:
+        for csv in csvs:
+            is_overshoot = "high_open" in csv.stem
+            if is_overshoot:
+                target_pos = y_pos_avg
+                target_key = 6
+            else:
+                target_pos = x_pos_avg
+                target_key = 5
 
-def evaluate_policy(env, policy, max_episode_steps, deterministic=True):
-    obs = env.reset()
-    total_reward = 0.
-    for _ in range(max_episode_steps):
-        with torch.no_grad():
-            action = policy.act(torchify(obs), deterministic=deterministic).cpu().numpy()
-        next_obs, reward, done, info = env.step(action)
-        total_reward += reward
-        if done:
-            break
-        else:
-            obs = next_obs
-    return total_reward
+            dataset = pd.read_csv(csv)
+            transformed_images = csv_to_imgs[csv]
 
+            predicted_pos = 0
+            for i, row in dataset.iterrows():
+                with torch.no_grad():
+                    joint_state = row[2:44].to_numpy(dtype=np.float32)
+                    transformed_image = transformed_images[i]
+                    obs = np.concatenate((joint_state, transformed_image))
+                    obs = torchify(obs)
+                    action_idx = torch.argmax(policy.act(obs)).item()
+                    kp = int(action_idx + 4)
+                    if kp == target_key: break
+            else:
+                predicted_pos = -1
+
+            if predicted_pos != -1:
+                if is_overshoot:
+                    predicted_pos = calculate_y_pos(dataset.iloc[i])
+                else:
+                    predicted_pos = dataset.iloc[i]["wrist_extension_pos"]
+            rewards.append(-abs(predicted_pos - target_pos)*100)
+
+            sim_rounds += 1
+            if sim_rounds >= n_simul:
+                keep_simulating = False
+                break
+
+    return rewards
 
 def set_seed(seed, env=None):
     torch.manual_seed(seed)
