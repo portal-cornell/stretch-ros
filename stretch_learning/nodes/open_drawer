@@ -17,12 +17,19 @@ import numpy as np
 from torchvision import transforms
 from cv_bridge import CvBridge, CvBridgeError
 
+from r3m import load_r3m
+from torchvision import transforms
 from iql.src.iql import ImplicitQLearning
 from iql.src.value_functions import TwinQ, ValueFunction
 from iql.src.policy import GaussianPolicy
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+r3m = load_r3m("resnet18")
+resnet_transform = transforms.Compose([transforms.Resize(256),
+                                        transforms.CenterCrop(224),
+                                        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+                                           
 class OpenDrawer(hm.HelloNode):
     def __init__(self):
         hm.HelloNode.__init__(self)
@@ -50,8 +57,9 @@ class OpenDrawer(hm.HelloNode):
                                     transforms.CenterCrop(224),
                                     transforms.ToTensor(),
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])            
-        ckpt_name = "iql_subdom"
-        ckpt_path = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/{ckpt_name}.ckpt").expanduser()
+        ckpt_name = "iql_subdom_734999_-47.73008688838466.pth"
+        # ckpt_name = "last.ckpt"
+        ckpt_path = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/{ckpt_name}").expanduser()
         self.is_iql = "iql" in ckpt_name
         
         if self.is_iql: 
@@ -83,7 +91,7 @@ class OpenDrawer(hm.HelloNode):
         for idx, (name, pos, vel, eff) in enumerate(js_msg):
             if name == 'joint_wrist_yaw': 
                 # print(pos)
-                # print('ya')
+                # print('yaw')
                 pos-=2.54
                 pos = 0.0
             if name == 'joint_wrist_pitch': 
@@ -96,8 +104,10 @@ class OpenDrawer(hm.HelloNode):
                 # input()
             js_arr.extend([pos, vel, eff])
             # js_arr.extend([pos, eff])
-        joint_states = torch.from_numpy(np.array(js_arr, dtype=np.float32))
-        self.joint_states_data = joint_states.unsqueeze(0)
+        self.joint_states_data = torch.from_numpy(np.array(js_arr, dtype=np.float32))
+        if not self.is_iql:
+            self.joint_states_data = self.joint_states_data.unsqueeze(0)
+        
 
     def image_callback(self, ros_rgb_image):
         try:
@@ -273,14 +283,17 @@ class OpenDrawer(hm.HelloNode):
         wait_amount = 100
         while not rospy.is_shutdown():
             if self.joint_states is not None and self.rbg_image is not None:
+                img = resnet_transform(self.rbg_image)
                 if self.is_iql:
-                    print(self.rbg_image.shape)
-                    print(self.joint_states_data.shape)
-                    exit()
-                    obs = torch.concatenate((self.joint_states_data, self.rbg_image))
-                    keypressed_index = torch.argmax(self.model.policy.act(obs)).item()
+                    img = r3m(img).squeeze(0)
+                    obs = torch.concat((self.joint_states_data, img))
+                    keypressed_index = torch.argmax(self.model.policy.act(obs, deterministic=True)).item()
+                    keypressed_index = keypressed_index+4
+                    print(self.model.policy.act(obs, deterministic=True))
+                    rospy.sleep(1)
                 else:
-                    prediction = self.model(self.rbg_image, self.joint_states_data)
+                    prediction = self.model(img
+                    , self.joint_states_data)
                     keypressed_index = torch.argmax(prediction).item()
                 keypressed = self.index_to_keypressed(keypressed_index)
                 # print(self.joint_states_data.shape)

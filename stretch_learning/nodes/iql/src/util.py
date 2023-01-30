@@ -1,10 +1,11 @@
+from pathlib import Path
+import sys
+sys.path.insert(0, Path.cwd().parent)
 import csv
 from datetime import datetime
 import json
-from pathlib import Path
 import random
 import string
-import sys
 
 import math
 import numpy as np
@@ -12,9 +13,9 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from itertools import chain
-from utils.common import DATA_DIR, OVERSHOOT_ROLLOUTS_DIR, LEARNER_ROLLOUTS_DIR
+from common import DATA_DIR, OVERSHOOT_ROLLOUTS_DIR, LEARNER_ROLLOUTS_DIR
 from PIL import Image
-from utils.common import calculate_y_pos
+from common import calculate_y_pos
 
 DEFAULT_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
