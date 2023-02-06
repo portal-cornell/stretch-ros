@@ -36,7 +36,7 @@ class OpenDrawer(hm.HelloNode):
         self.rate = 10.0
         self.trajectory_client = actionlib.SimpleActionClient('/stretch_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
 
-        self.step_size = "medium"
+        self.step_size = "small"
         self.rad_per_deg = math.pi/180.0
         self.small_deg = 3.0
         self.small_rad = self.rad_per_deg * self.small_deg
@@ -57,8 +57,8 @@ class OpenDrawer(hm.HelloNode):
                                     transforms.CenterCrop(224),
                                     transforms.ToTensor(),
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])            
-        ckpt_name = "iql_subdom_734999_-47.73008688838466.pth"
-        # ckpt_name = "last.ckpt"
+        # ckpt_name = "iql_subdom_734999_-47.73008688838466.pth"
+        ckpt_name = "last.ckpt"
         ckpt_path = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/{ckpt_name}").expanduser()
         self.is_iql = "iql" in ckpt_name
         
@@ -127,34 +127,36 @@ class OpenDrawer(hm.HelloNode):
 
     def index_to_keypressed(self, index):
         _index_to_keypressed = {
-            # base forward
-            0: '4',
-            # base back
-            1: '6',
-            # base rotate left
-            2: '7',
-            # base rotate right
-            3: '9',
+            # noop
+            0: '_',
             # arm up
-            4: '8',
+            1: "8",
             # arm down
-            5:'2',
+            2: "2",
             # arm out
-            6:'w',
+            3: 'w',
             # arm in
-            7: 'x',
+            4: 'x',
+            # base forward
+            5: '4',
+            # base back
+            6: '6',
+            # base rotate left
+            7: '7',
+            # base rotate right
+            8: '9',
             # gripper right
-            8: 'a',
+            9: 'a',
             # gripper left
-            9: 'd',
+            10: 'd',
             # gripper down
-            10: 'c',
+            11: 'c',
             # gripper up
-            11: 'v',
+            12: 'v',
             # gripper roll right
-            12: 'o',
+            13: 'o',
             # gripper roll left
-            13: 'p'
+            14: 'p'
         }
         return _index_to_keypressed[index]
 
@@ -296,6 +298,9 @@ class OpenDrawer(hm.HelloNode):
                     , self.joint_states_data)
                     keypressed_index = torch.argmax(prediction).item()
                 keypressed = self.index_to_keypressed(keypressed_index)
+                if keypressed == "_":
+                    # noop
+                    continue
                 # print(self.joint_states_data.shape)
                 # print(self.joint_states_data[0,27])
                 # if self.joint_states_data[0,27] > 0.97 and nudge_amount:
