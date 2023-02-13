@@ -36,7 +36,7 @@ class OpenDrawer(hm.HelloNode):
         self.rate = 10.0
         self.trajectory_client = actionlib.SimpleActionClient('/stretch_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
 
-        self.step_size = "small"
+        self.step_size = "medium"
         self.rad_per_deg = math.pi/180.0
         self.small_deg = 3.0
         self.small_rad = self.rad_per_deg * self.small_deg
@@ -58,7 +58,7 @@ class OpenDrawer(hm.HelloNode):
                                     transforms.ToTensor(),
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])            
         # ckpt_name = "iql_subdom_734999_-47.73008688838466.pth"
-        ckpt_name = "last.ckpt"
+        ckpt_name = "bc_all_with_reg.ckpt"
         ckpt_path = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/{ckpt_name}").expanduser()
         self.is_iql = "iql" in ckpt_name
         
