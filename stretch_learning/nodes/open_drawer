@@ -6,6 +6,7 @@ import message_filters
 import actionlib
 from pathlib import Path
 from model_lightning import BC
+from end_eff_only import BC_End_Eff
 from sensor_msgs.msg import JointState
 from sensor_msgs.msg import Image
 from control_msgs.msg import FollowJointTrajectoryGoal, FollowJointTrajectoryAction
@@ -58,9 +59,11 @@ class OpenDrawer(hm.HelloNode):
                                     transforms.ToTensor(),
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])            
         # ckpt_name = "iql_subdom_734999_-47.73008688838466.pth"
-        ckpt_name = "bc_all_with_reg.ckpt"
+        # ckpt_name = "bc_all_with_reg.ckpt"
+        ckpt_name = "end_eff_with_corrections.ckpt"
         ckpt_path = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/{ckpt_name}").expanduser()
         self.is_iql = "iql" in ckpt_name
+        self.end_eff_only = "end_eff" in ckpt_name
         
         if self.is_iql: 
             obs_dim, act_dim = 554, 4
@@ -80,6 +83,8 @@ class OpenDrawer(hm.HelloNode):
                 discount=discount
             )
             self.model.load_state_dict(torch.load(str(ckpt_path), map_location=torch.device(device)))
+        elif self.end_eff_only:
+            self.model = BC_End_Eff.load_from_checkpoint(ckpt_path)
         else:
             self.model = BC.load_from_checkpoint(ckpt_path)
 
@@ -89,21 +94,22 @@ class OpenDrawer(hm.HelloNode):
         js_msg = sorted(js_msg, key=lambda x: x[0])
         js_arr = []
         for idx, (name, pos, vel, eff) in enumerate(js_msg):
-            if name == 'joint_wrist_yaw': 
-                # print(pos)
-                # print('yaw')
-                pos-=2.54
-                pos = 0.0
-            if name == 'joint_wrist_pitch': 
-                # print(pos)
-                # print('pit')
-                pos-=0.245
-                pos = -0.85
+            # if name == 'joint_wrist_yaw': 
+            #     # print(pos)
+            #     # print('yaw')
+            #     pos-=2.54
+            #     pos = 0.0
+            # if name == 'joint_wrist_pitch': 
+            #     # print(pos)
+            #     # print('pit')
+            #     pos-=0.245
+            #     pos = -0.85
             # if name == 'joint_arm_l0':
             #     print("idx", idx)
                 # input()
             js_arr.extend([pos, vel, eff])
             # js_arr.extend([pos, eff])
+        
         self.joint_states_data = torch.from_numpy(np.array(js_arr, dtype=np.float32))
         if not self.is_iql:
             self.joint_states_data = self.joint_states_data.unsqueeze(0)
@@ -157,6 +163,25 @@ class OpenDrawer(hm.HelloNode):
             13: 'o',
             # gripper roll left
             14: 'p'
+        }
+        return _index_to_keypressed[index]
+
+    def index_to_keypressed_old(self, index):
+        _index_to_keypressed = {
+            0: '4', 
+            1: '6', 
+            2: '7', 
+            3: '9',
+            4: '8',
+            5: '2',
+            6: 'w', 
+            7: 'x',
+            8: 'a',
+            9: 'd',
+            10: 'c',
+            11: 'v',
+            12: 'o',
+            13: 'p',
         }
         return _index_to_keypressed[index]
 
@@ -285,6 +310,7 @@ class OpenDrawer(hm.HelloNode):
         wait_amount = 100
         while not rospy.is_shutdown():
             if self.joint_states is not None and self.rbg_image is not None:
+
                 img = resnet_transform(self.rbg_image)
                 if self.is_iql:
                     img = r3m(img).squeeze(0)
@@ -293,11 +319,34 @@ class OpenDrawer(hm.HelloNode):
                     keypressed_index = keypressed_index+4
                     print(self.model.policy.act(obs, deterministic=True))
                     rospy.sleep(1)
-                else:
-                    prediction = self.model(img
-                    , self.joint_states_data)
+                elif not self.end_eff_only:
+                    prediction = self.model(img, self.joint_states_data)
                     keypressed_index = torch.argmax(prediction).item()
-                keypressed = self.index_to_keypressed(keypressed_index)
+                if self.end_eff_only:
+                    # calculate end eff
+                    joint_lift_idx = self.joint_states.name.index("joint_lift")
+                    wrist_ext_idx = self.joint_states.name.index("joint_arm_l0")
+                    wrist_pitch_idx = self.joint_states.name.index("joint_wrist_pitch")
+                    gripper_height = self.joint_states.position[joint_lift_idx]
+                    gripper_stretch = self.joint_states.position[wrist_ext_idx]
+                    gripper_pitch = self.joint_states.position[wrist_pitch_idx]
+                    gripper_len = 0.21
+                    gripper_delta_y = gripper_len * math.sin(gripper_pitch)
+                    gripper_height += gripper_delta_y
+                    
+                    self.joint_states_data = torch.zeros((1, 42), device=device)
+                    self.joint_states_data[:, 27] = gripper_height - 0.1                    
+                    self.joint_states_data[:, 39] = gripper_stretch * 4
+
+                    print("gripper height: ", gripper_height)                    
+                    print("gripper stretch: ", gripper_stretch)                    
+
+                    prediction = self.model(img, self.joint_states_data)
+                    keypressed_index = torch.argmax(prediction).item()
+
+                    keypressed = self.index_to_keypressed_old(keypressed_index)
+                else:
+                    keypressed = self.index_to_keypressed(keypressed_index)
                 if keypressed == "_":
                     # noop
                     continue
