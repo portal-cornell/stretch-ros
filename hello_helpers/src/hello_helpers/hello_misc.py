@@ -64,6 +64,14 @@ def get_left_finger_state(joint_states):
     left_finger_effort = joint_states.effort[i]
     return [left_finger_position, left_finger_velocity, left_finger_effort]
 
+def get_wrist_yaw(joint_states):
+    joint_name = "joint_wrist_yaw"
+    i = joint_states.name.index(joint_name)
+    wrist_yaw_pos = joint_states.position[i]
+    wrist_yaw_velocity = joint_states.velocity[i]
+    wrist_yaw_effort = joint_states.velocity[i]
+    return [wrist_yaw_pos, wrist_yaw_velocity, wrist_yaw_effort]
+
 class HelloNode:
     def __init__(self):
         self.joint_state = None
