@@ -5,7 +5,8 @@ import math
 import message_filters
 import actionlib
 from pathlib import Path
-from model_lightning import BC
+from old_model_bc import Ablations_BC
+from model_bc import BC
 from end_eff_only import BC_End_Eff
 from sensor_msgs.msg import JointState
 from sensor_msgs.msg import Image
@@ -17,6 +18,8 @@ import torch
 import numpy as np
 from torchvision import transforms
 from cv_bridge import CvBridge, CvBridgeError
+import cv2
+import csv
 
 from r3m import load_r3m
 from torchvision import transforms
@@ -27,12 +30,9 @@ from iql.src.policy import GaussianPolicy
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 r3m = load_r3m("resnet18")
-resnet_transform = transforms.Compose([transforms.Resize(256),
-                                        transforms.CenterCrop(224),
-                                        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-                                           
+
 class OpenDrawer(hm.HelloNode):
-    def __init__(self):
+    def __init__(self, ablation_type=None, skill_name="pick", model_type="visuomotor_bc", train_type="end-eff"):
         hm.HelloNode.__init__(self)
         self.rate = 10.0
         self.trajectory_client = actionlib.SimpleActionClient('/stretch_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
@@ -60,10 +60,17 @@ class OpenDrawer(hm.HelloNode):
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])            
         # ckpt_name = "iql_subdom_734999_-47.73008688838466.pth"
         # ckpt_name = "bc_all_with_reg.ckpt"
-        ckpt_name = "end_eff_with_corrections.ckpt"
-        ckpt_path = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/{ckpt_name}").expanduser()
-        self.is_iql = "iql" in ckpt_name
-        self.end_eff_only = "end_eff" in ckpt_name
+
+        if ablation_type:
+            ckpt_dir = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/ablation_ckpts").expanduser()
+            ckpt_name = Path(ablation_type, "last.ckpt")
+        else:
+            ckpt_dir = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints", 
+                            skill_name, model_type, train_type).expanduser()
+            ckpt_name = "last.ckpt"
+        ckpt_path = Path(ckpt_dir, ckpt_name)
+        
+        self.is_iql = "iql" in str(ckpt_name)
         
         if self.is_iql: 
             obs_dim, act_dim = 554, 4
@@ -83,10 +90,13 @@ class OpenDrawer(hm.HelloNode):
                 discount=discount
             )
             self.model.load_state_dict(torch.load(str(ckpt_path), map_location=torch.device(device)))
-        elif self.end_eff_only:
-            self.model = BC_End_Eff.load_from_checkpoint(ckpt_path)
+        elif ablation_type:
+            self.model = Ablations_BC.load_from_checkpoint(ckpt_path)
         else:
             self.model = BC.load_from_checkpoint(ckpt_path)
+        
+        print(f"Loading checkpoint from {str(ckpt_path)}.\n")
+
 
     def joint_states_callback(self, msg):
         self.joint_states = msg
@@ -94,21 +104,7 @@ class OpenDrawer(hm.HelloNode):
         js_msg = sorted(js_msg, key=lambda x: x[0])
         js_arr = []
         for idx, (name, pos, vel, eff) in enumerate(js_msg):
-            # if name == 'joint_wrist_yaw': 
-            #     # print(pos)
-            #     # print('yaw')
-            #     pos-=2.54
-            #     pos = 0.0
-            # if name == 'joint_wrist_pitch': 
-            #     # print(pos)
-            #     # print('pit')
-            #     pos-=0.245
-            #     pos = -0.85
-            # if name == 'joint_arm_l0':
-            #     print("idx", idx)
-                # input()
             js_arr.extend([pos, vel, eff])
-            # js_arr.extend([pos, eff])
         
         self.joint_states_data = torch.from_numpy(np.array(js_arr, dtype=np.float32))
         if not self.is_iql:
@@ -117,9 +113,7 @@ class OpenDrawer(hm.HelloNode):
 
     def image_callback(self, ros_rgb_image):
         try:
-            raw_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, 'bgr8')
-            self.rbg_image = self.img_transform(raw_image)
-            self.rbg_image = self.rbg_image.unsqueeze(0)
+            self.raw_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, 'bgr8')
         except CvBridgeError as error:
             print(error)
 
@@ -162,7 +156,11 @@ class OpenDrawer(hm.HelloNode):
             # gripper roll right
             13: 'o',
             # gripper roll left
-            14: 'p'
+            14: 'p',
+            # gripper open
+            15: '0',
+            # gripper close
+            16: '5'
         }
         return _index_to_keypressed[index]
 
@@ -306,12 +304,29 @@ class OpenDrawer(hm.HelloNode):
         self.rgb_image_subscriber.registerCallback(self.image_callback)
 
         rate = rospy.Rate(self.rate)
-        nudge_amount = 4
-        wait_amount = 100
-        while not rospy.is_shutdown():
-            if self.joint_states is not None and self.rbg_image is not None:
 
-                img = resnet_transform(self.rbg_image)
+        cwd = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning"
+        csv_path = Path(cwd, "kp.csv")
+        img_dir = Path(cwd, "images")
+        if not img_dir.exists():
+            img_dir.mkdir()
+        else:
+            for img in img_dir.glob("*.png"):
+                img.unlink()
+
+        images, keypresses = [], []
+        img_count = 0
+        while not rospy.is_shutdown():
+            if self.joint_states is not None and self.raw_image is not None:
+                img_count += 1
+
+                # if len(self.joint_states) <= 1:
+                #     # TODO: need to figure out why it's single dim
+                #     continue
+
+                rbg_image = self.img_transform(self.raw_image)
+                rbg_image = rbg_image.unsqueeze(0)
+
                 if self.is_iql:
                     img = r3m(img).squeeze(0)
                     obs = torch.concat((self.joint_states_data, img))
@@ -319,55 +334,27 @@ class OpenDrawer(hm.HelloNode):
                     keypressed_index = keypressed_index+4
                     print(self.model.policy.act(obs, deterministic=True))
                     rospy.sleep(1)
-                elif not self.end_eff_only:
-                    prediction = self.model(img, self.joint_states_data)
-                    keypressed_index = torch.argmax(prediction).item()
-                if self.end_eff_only:
-                    # calculate end eff
-                    joint_lift_idx = self.joint_states.name.index("joint_lift")
-                    wrist_ext_idx = self.joint_states.name.index("joint_arm_l0")
-                    wrist_pitch_idx = self.joint_states.name.index("joint_wrist_pitch")
-                    gripper_height = self.joint_states.position[joint_lift_idx]
-                    gripper_stretch = self.joint_states.position[wrist_ext_idx]
-                    gripper_pitch = self.joint_states.position[wrist_pitch_idx]
-                    gripper_len = 0.21
-                    gripper_delta_y = gripper_len * math.sin(gripper_pitch)
-                    gripper_height += gripper_delta_y
-                    
-                    self.joint_states_data = torch.zeros((1, 42), device=device)
-                    self.joint_states_data[:, 27] = gripper_height - 0.1                    
-                    self.joint_states_data[:, 39] = gripper_stretch * 4
-
-                    print("gripper height: ", gripper_height)                    
-                    print("gripper stretch: ", gripper_stretch)                    
-
-                    prediction = self.model(img, self.joint_states_data)
-                    keypressed_index = torch.argmax(prediction).item()
-
-                    keypressed = self.index_to_keypressed_old(keypressed_index)
                 else:
-                    keypressed = self.index_to_keypressed(keypressed_index)
+                    prediction = self.model(rbg_image, self.joint_states_data)
+                    keypressed_index = torch.argmax(prediction).item()
+                keypressed = self.index_to_keypressed(keypressed_index)
+
+
+                img_path = Path(img_dir, f"{img_count:04}.jpg")
+
+                cv2.imwrite(str(img_path), self.raw_image)
+                images.append(rbg_image)
+
+                keypresses.append(str(keypressed_index))
+                with open(csv_path, "w", encoding="UTF8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerows(keypresses)
+
                 if keypressed == "_":
                     # noop
+                    print("NOOP")
                     continue
-                # print(self.joint_states_data.shape)
-                # print(self.joint_states_data[0,27])
-                # if self.joint_states_data[0,27] > 0.97 and nudge_amount:
-                #     print("HERE")
-                #     rospy.sleep(1)
-                #     self.send_command(self.get_command('w'))
-                #     rospy.sleep(0.1)
-                #     nudge_amount=0
-                #     nudge_amount = 0
-                #     # nudge_amount -=1
-                #     continue
-                # if self.joint_states_data[0,3] > 0.050 and wait_amount:
-                #     print("YOPOOOOOOOOOOOOOo")
-                #     # input()
-                #     rospy.sleep(2)
-                #     wait_amount = 0
-                #     self.send_command(self.get_command('2'))
-                #     rospy.sleep(0.25)
+
                 command = self.get_command(keypressed)
                 print(f'{rospy.Time().now()}, {keypressed_index=}, {command=}')
                 self.send_command(command)
@@ -375,5 +362,23 @@ class OpenDrawer(hm.HelloNode):
 
 
 if __name__ == '__main__':
-    node = OpenDrawer()
+    print("**********CURRENTLY IN ABLATIONS MODE**********")
+    print("Please specify ablation type from the options below. \
+        There is no need to include the dash:")
+    print("\t-js (joint states only)")
+    print("\t-end-eff (end effector only)")
+    print("\t-end-eff-img (end effector + images)")
+    print("\t-end-eff-js (end effector + joint states)")
+    print("\t-reg (all inputs)")
+    print("\t-reg-no-vel (all inputs with velocity masked)")
+
+    accepted_types = ["js", "end-eff", "end-eff-img", "end-eff-js", \
+                        "reg", "reg-no-vel"]
+    ablation_type = input()
+
+    while ablation_type not in accepted_types:
+        print("Type not accepted. Please try again:")
+        ablation_type = input()
+
+    node = OpenDrawer(ablation_type=ablation_type)
     node.main()
