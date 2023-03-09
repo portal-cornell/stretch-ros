@@ -11,6 +11,11 @@ __pycache__/
 */iql/logs
 */iql/wandb
 
+# debugging
+*/images	
+*kp.csv
+
+
 # Checkpoints
 checkpoints/
 *ckpts/
