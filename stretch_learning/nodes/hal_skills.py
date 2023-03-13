@@ -2,10 +2,10 @@
 
 import rospy
 import math
+import argparse
 import message_filters
 import actionlib
 from pathlib import Path
-from old_model_bc import Ablations_BC
 from model_bc import BC
 from end_eff_only import BC_End_Eff
 from sensor_msgs.msg import JointState
@@ -18,21 +18,16 @@ import torch
 import numpy as np
 from torchvision import transforms
 from cv_bridge import CvBridge, CvBridgeError
-import cv2
-import csv
 
 from r3m import load_r3m
 from torchvision import transforms
-from iql.src.iql import ImplicitQLearning
-from iql.src.value_functions import TwinQ, ValueFunction
-from iql.src.policy import GaussianPolicy
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 r3m = load_r3m("resnet18")
-
+                                           
 class OpenDrawer(hm.HelloNode):
-    def __init__(self, ablation_type=None, skill_name="pick", model_type="visuomotor_bc", train_type="end-eff"):
+    def __init__(self, args):
         hm.HelloNode.__init__(self)
         self.rate = 10.0
         self.trajectory_client = actionlib.SimpleActionClient('/stretch_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
@@ -58,43 +53,16 @@ class OpenDrawer(hm.HelloNode):
                                     transforms.CenterCrop(224),
                                     transforms.ToTensor(),
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])            
-        # ckpt_name = "iql_subdom_734999_-47.73008688838466.pth"
-        # ckpt_name = "bc_all_with_reg.ckpt"
 
-        if ablation_type:
-            ckpt_dir = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/ablation_ckpts").expanduser()
-            ckpt_name = Path(ablation_type, "last.ckpt")
-        else:
-            ckpt_dir = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints", 
-                            skill_name, model_type, train_type).expanduser()
-            ckpt_name = "last.ckpt"
+        self.skill_name = args.skill_name
+        self.model_type = args.model_type
+        self.train_type = args.train_type
+
+        ckpt_dir = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints", 
+                        args.skill_name, args.model_type, args.train_type).expanduser()
+        ckpt_name = "last.ckpt"
         ckpt_path = Path(ckpt_dir, ckpt_name)
-        
-        self.is_iql = "iql" in str(ckpt_name)
-        
-        if self.is_iql: 
-            obs_dim, act_dim = 554, 4
-            hidden_dim, n_hidden = 256, 2
-            learning_rate = 3e-4
-            n_steps, tau, beta, alpha, discount = 1000, 0.7, 3.0, 0.005, 0.99
-            policy = GaussianPolicy(obs_dim, act_dim, hidden_dim=hidden_dim, n_hidden=n_hidden)
-            self.model = ImplicitQLearning(
-                qf=TwinQ(obs_dim, act_dim, hidden_dim=hidden_dim, n_hidden=n_hidden),
-                vf=ValueFunction(obs_dim, hidden_dim=hidden_dim, n_hidden=n_hidden),
-                policy=policy,
-                optimizer_factory=lambda params: torch.optim.Adam(params, lr=learning_rate),
-                max_steps=n_steps,
-                tau=tau,
-                beta=beta,
-                alpha=alpha,
-                discount=discount
-            )
-            self.model.load_state_dict(torch.load(str(ckpt_path), map_location=torch.device(device)))
-        elif ablation_type:
-            self.model = Ablations_BC.load_from_checkpoint(ckpt_path)
-        else:
-            self.model = BC.load_from_checkpoint(ckpt_path)
-        
+        self.model = BC.load_from_checkpoint(ckpt_path)
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
 
 
@@ -105,25 +73,17 @@ class OpenDrawer(hm.HelloNode):
         js_arr = []
         for idx, (name, pos, vel, eff) in enumerate(js_msg):
             js_arr.extend([pos, vel, eff])
-        
         self.joint_states_data = torch.from_numpy(np.array(js_arr, dtype=np.float32))
-        if not self.is_iql:
+        if len(self.joint_states_data.size()) <= 1:
             self.joint_states_data = self.joint_states_data.unsqueeze(0)
-        
 
     def image_callback(self, ros_rgb_image):
         try:
-            self.raw_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, 'bgr8')
+            raw_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, 'bgr8')
+            self.rbg_image = self.img_transform(raw_image)
+            self.rbg_image = self.rbg_image.unsqueeze(0)
         except CvBridgeError as error:
             print(error)
-
-    def move_to_initial_configuration(self):
-        # TODO: needs to be changed
-        initial_pose = {'wrist_extension': 0.01,
-                        'joint_wrist_yaw': 1.570796327,
-                        'gripper_aperture': 0.0}
-        rospy.loginfo('Move to the initial configuration for drawer opening.')
-        self.move_to_pose(initial_pose) 
 
     def index_to_keypressed(self, index):
         _index_to_keypressed = {
@@ -161,25 +121,6 @@ class OpenDrawer(hm.HelloNode):
             15: '0',
             # gripper close
             16: '5'
-        }
-        return _index_to_keypressed[index]
-
-    def index_to_keypressed_old(self, index):
-        _index_to_keypressed = {
-            0: '4', 
-            1: '6', 
-            2: '7', 
-            3: '9',
-            4: '8',
-            5: '2',
-            6: 'w', 
-            7: 'x',
-            8: 'a',
-            9: 'd',
-            10: 'c',
-            11: 'v',
-            12: 'o',
-            13: 'p',
         }
         return _index_to_keypressed[index]
 
@@ -263,7 +204,6 @@ class OpenDrawer(hm.HelloNode):
             self.step_size = 'small'
         return command
 
-
     def send_command(self, command):
         joint_state = self.joint_states
         if (joint_state is not None) and (command is not None):
@@ -287,15 +227,82 @@ class OpenDrawer(hm.HelloNode):
             trajectory_goal.trajectory.header.stamp = rospy.Time.now()
             self.trajectory_client.send_goal(trajectory_goal)
 
-    def torchify(self, x):
-        x = torch.from_numpy(x)
-        if x.dtype is torch.float64:
-            x = x.float()
-        x = x.to(device=device)
-        return x
+    #-----------------pick() initial configs-----------------#
+    def move_arm_pick(self):
+        rospy.loginfo("Set arm")
+        self.pick_starting_height = 0.828
+        self.joint_lift_index = self.joint_states.name.index("joint_lift")
+        pose = {'wrist_extension': 0.01,
+                'joint_lift': self.pick_starting_height,  # for cabinet
+                'joint_wrist_pitch': 0.2,
+                'joint_wrist_yaw': -0.09}
+        self.move_to_pose(pose)
+        return True
+
+    def move_head_pick(self):
+        tilt = -0.4358
+        pan = -1.751
+        rospy.loginfo("Set head pan")
+        pose = {'joint_head_pan': pan, 'joint_head_tilt': tilt}
+        self.move_to_pose(pose)
+        return True
+
+    def open_grip(self):
+        point = JointTrajectoryPoint()
+        trajectory_goal = FollowJointTrajectoryGoal()
+        trajectory_goal.goal_time_tolerance = rospy.Time(1.0)
+        trajectory_goal.trajectory.joint_names = ["joint_gripper_finger_left"]
+        point.positions = [0.22]
+        trajectory_goal.trajectory.points = [point]
+        self.trajectory_client.send_goal(trajectory_goal)
+        grip_change_time = 2
+        rospy.sleep(grip_change_time)
+
+    def pick_initial_config(self, rate):
+        done_head_pan = False
+        while not done_head_pan:
+            if self.joint_states:
+                done_head_pan = self.move_head_pick()
+            rate.sleep()
+        done_initial_config = False
+        while not done_initial_config:
+            if self.joint_states:        
+                done_initial_config = self.move_arm_pick()
+            rate.sleep()
+        self.open_grip()
+
+    #-----------------pick_table() initial configs-----------------#
+    def move_arm_pick_table(self):
+        rospy.loginfo("Set arm")
+        self.pick_starting_height = 0.9096
+        self.joint_lift_index = self.joint_states.name.index("joint_lift")
+        pose = {'wrist_extension': 0.01,
+                'joint_lift': self.pick_starting_height,
+                'joint_wrist_pitch': 0.2,
+                'joint_wrist_yaw': -0.09}
+        self.move_to_pose(pose)
+        return True
+
+    def pick_table_initial_config(self, rate):
+        done_head_pan = False
+        while not done_head_pan:
+            if self.joint_states:
+                done_head_pan = self.move_head_pick()
+            rate.sleep()
+        done_initial_config = False
+        while not done_initial_config:
+            if self.joint_states:        
+                done_initial_config = self.move_arm_pick_table()
+            rate.sleep()
+        self.open_grip()
+
+    def check_pick_termination(self):
+        curr_height = self.joint_states.position[self.joint_lift_index]
+        if curr_height - self.pick_starting_height > 0.05:
+            return True
 
     def main(self):
-        rospy.init_node("open_drawer_bc")
+        rospy.init_node("hal_skills_node")
         self.node_name = rospy.get_name()
         rospy.loginfo("{0} started".format(self.node_name))
 
@@ -305,50 +312,25 @@ class OpenDrawer(hm.HelloNode):
 
         rate = rospy.Rate(self.rate)
 
-        cwd = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning"
-        csv_path = Path(cwd, "kp.csv")
-        img_dir = Path(cwd, "images")
-        if not img_dir.exists():
-            img_dir.mkdir()
-        else:
-            for img in img_dir.glob("*.png"):
-                img.unlink()
+        # get hal to starting position for pick
+        if self.skill_name == "pick":
+            self.pick_initial_config(rate)
+        elif self.skill_name == "pick_table":
+            self.pick_table_initial_config(rate)
 
-        images, keypresses = [], []
-        img_count = 0
+
         while not rospy.is_shutdown():
-            if self.joint_states is not None and self.raw_image is not None:
-                img_count += 1
+            if self.joint_states is not None and self.rbg_image is not None:
 
-                # if len(self.joint_states) <= 1:
-                #     # TODO: need to figure out why it's single dim
-                #     continue
+                # check delta to determine skill termination
+                if "pick" in self.skill_name and self.check_pick_termination():
+                    rospy.loginfo("\n\n***********Pick Completed***********\n\n")
+                    return 0
 
-                rbg_image = self.img_transform(self.raw_image)
-                rbg_image = rbg_image.unsqueeze(0)
-
-                if self.is_iql:
-                    img = r3m(img).squeeze(0)
-                    obs = torch.concat((self.joint_states_data, img))
-                    keypressed_index = torch.argmax(self.model.policy.act(obs, deterministic=True)).item()
-                    keypressed_index = keypressed_index+4
-                    print(self.model.policy.act(obs, deterministic=True))
-                    rospy.sleep(1)
-                else:
-                    prediction = self.model(rbg_image, self.joint_states_data)
-                    keypressed_index = torch.argmax(prediction).item()
+                # if not, continue with next command
+                prediction = self.model(self.rbg_image, self.joint_states_data)
+                keypressed_index = torch.argmax(prediction).item()
                 keypressed = self.index_to_keypressed(keypressed_index)
-
-
-                img_path = Path(img_dir, f"{img_count:04}.jpg")
-
-                cv2.imwrite(str(img_path), self.raw_image)
-                images.append(rbg_image)
-
-                keypresses.append(str(keypressed_index))
-                with open(csv_path, "w", encoding="UTF8", newline="") as f:
-                    writer = csv.writer(f)
-                    writer.writerows(keypresses)
 
                 if keypressed == "_":
                     # noop
@@ -360,26 +342,17 @@ class OpenDrawer(hm.HelloNode):
                 self.send_command(command)
             rate.sleep()
 
+def get_args():
+    supported_skills = ["pick"]
+    supported_models = ["visuomotor_bc"]
+    supported_types = ["reg", "reg-no-vel", "end-eff", "end-eff-img", "end-eff-img-comp-2"]
+
+    parser = argparse.ArgumentParser(description="main_lighting")
+    parser.add_argument("--skill_name", type=str, choices=supported_skills, default="pick")
+    parser.add_argument("--model_type", type=str, choices=supported_models, default="visuomotor_bc")
+    parser.add_argument("--train_type", type=str, choices=supported_types, default="reg")
+    return parser.parse_args(rospy.myargv()[1:])
 
 if __name__ == '__main__':
-    print("**********CURRENTLY IN ABLATIONS MODE**********")
-    print("Please specify ablation type from the options below. \
-        There is no need to include the dash:")
-    print("\t-js (joint states only)")
-    print("\t-end-eff (end effector only)")
-    print("\t-end-eff-img (end effector + images)")
-    print("\t-end-eff-img-comp-2 (end effector + images)")
-    print("\t-end-eff-js (end effector + joint states)")
-    print("\t-reg (all inputs)")
-    print("\t-reg-no-vel (all inputs with velocity masked)")
-
-    accepted_types = ["js", "end-eff", "end-eff-img", "end-eff-js", \
-                        "reg", "reg-no-vel", "end-eff-img-comp-2"]
-    ablation_type = input()
-
-    while ablation_type not in accepted_types:
-        print("Type not accepted. Please try again:")
-        ablation_type = input()
-
-    node = OpenDrawer(ablation_type=ablation_type)
+    node = OpenDrawer(get_args())
     node.main()

@@ -26,7 +26,7 @@ class BC(pl.LightningModule):
         self.img_squeeze_linear = nn.Linear(512, img_comp_dim)
         self.conv_net_output_dim = img_comp_dim if compress_img else 512
         self.joint_state_dims = joint_state_dims
-        self.end_eff_dim = 2
+        self.end_eff_dim = 3
         
         total_dims = self.conv_net_output_dim + self.joint_state_dims + self.end_eff_dim
         self.fc1 = nn.Linear(total_dims, 256)
@@ -87,7 +87,8 @@ class BC(pl.LightningModule):
         gripper_delta_y = gripper_len * torch.sin(pitch)
         end_eff_y = lift + gripper_delta_y
         end_eff_x = js[:, 39]
-        end_eff_features = torch.cat((end_eff_y.unsqueeze(1), end_eff_x.unsqueeze(1)), dim=1)
+        gripper_left = js[:, 15]
+        end_eff_features = torch.cat((end_eff_y.unsqueeze(1), end_eff_x.unsqueeze(1), gripper_left.unsqueeze(1)), dim=1)
         return end_eff_features
 
     def on_after_batch_transfer(self, batch, dataloader_idx):
