@@ -16,6 +16,20 @@ import stretch_funmap.navigate as nv
 class PickObjectNode(hm.HelloNode):
 
     def __init__(self):
+
+        """
+        TO RUN:
+        0. In one terminal:
+            yolov5
+
+        1. In two separate terminals:
+            sc
+            hr
+
+        2. In third terminal: 
+            pick
+        """
+        
         hm.HelloNode.__init__(self)
         self.rate = 10.0
         self.trajectory_client = actionlib.SimpleActionClient('/stretch_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
