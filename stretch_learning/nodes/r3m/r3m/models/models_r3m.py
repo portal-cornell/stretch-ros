@@ -14,7 +14,6 @@ from r3m import utils
 from pathlib import Path
 from torchvision.utils import save_image
 import torchvision.transforms as T
-from torchvision.models import ResNet18_Weights, ResNet34_Weights, ResNet50_Weights
 
 epsilon = 1e-8
 def do_nothing(x): return x
@@ -36,7 +35,7 @@ class R3M(nn.Module):
 
         ## Distances and Metrics
         self.cs = torch.nn.CosineSimilarity(1)
-        self.bce = nn.BCELoss(reduction=None)
+        self.bce = nn.BCELoss(reduce=False)
         self.sigm = Sigmoid()
 
         params = []
@@ -44,13 +43,13 @@ class R3M(nn.Module):
         ## Visual Encoder
         if size == 18:
             self.outdim = 512
-            self.convnet = torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)
+            self.convnet = torchvision.models.resnet18(weights=None)
         elif size == 34:
             self.outdim = 512
-            self.convnet = torchvision.models.resnet34(weights=ResNet34_Weights.DEFAULT)
+            self.convnet = torchvision.models.resnet34(weights=None)
         elif size == 50:
             self.outdim = 2048
-            self.convnet = torchvision.models.resnet50(weights=ResNet50_Weights.DEFAULT)
+            self.convnet = torchvision.models.resnet50(weights=None)
         elif size == 0:
             from transformers import AutoConfig
             self.outdim = 768
