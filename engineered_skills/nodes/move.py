@@ -5,6 +5,7 @@ import rospy
 import actionlib
 import sys
 import time
+import math
 
 # We need the MoveBaseAction and MoveBaseGoal from the move_base_msgs package.
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
@@ -19,9 +20,10 @@ from utils.basic_navigation import StretchNavigation
 from utils.basic_move import Move
 from utils.basic_joint_mover import JointMover
 
-HOME = (-1.85, 2.77, -0.85)
+HOME = (0.0, 0.0, 0.0)
+TABLE = (1.98, -.782, 0)
 
-TABLE = (-0.397, 0.024, -0.85)
+SALT = (0.1, -1.6, -1*math.pi/2)
 
 MOVE_WITH_CART_POSE = (-0.397, 0.024, 0.5)
 
@@ -56,10 +58,10 @@ if __name__ == '__main__':
     TO RUN:
 
     1. In one terminal:
-        roslaunch stretch_demos eos_demo_2022.launch map_yaml:=${HELLO_FLEET_PATH}/maps/mapping_eod_11_14.yaml
+        roslaunch engineered_skills move.launch map_yaml:=${HELLO_FLEET_PATH}/maps/spring2023demo.yaml
 
     2. Then run:
-        python3 /home/strech/catkin_ws/src/stretch_ros/stretch_demos/nodes/eos_demo_2022_planner.py
+        python3 /home/strech/catkin_ws/src/stretch_ros/engineered_skills/nodes/move.py
 
     3. to get a better point based on rviz: rostopic echo /clicked_point
     """
@@ -80,18 +82,24 @@ if __name__ == '__main__':
     
     nav.go_to(TABLE, planner.done_callback("went_to_table"))  # go roughly to the table
 
-    nav.go_to(MOVE_WITH_CART_POSE, planner.done_callback("pos_ready_for_cart"))
-    
-    joint_mover.lift_arm_before_extend()
+    time.sleep(3)
+
+    nav.go_to(SALT, planner.done_callback("went_to_table"))  # go roughly to the table
 
     time.sleep(3)
 
-    joint_mover.extend_arm_before_latching_cart()
+    nav.go_to(HOME, planner.done_callback("pos_ready_for_cart"))
+    
+    # joint_mover.lift_arm_before_extend()
 
-    time.sleep(2.5)
+    # time.sleep(3)
 
-    joint_mover.lower_arm_to_cart()
+    # joint_mover.extend_arm_before_latching_cart()
 
-    time.sleep(2)
+    # time.sleep(2.5)
 
-    nav.go_to(HOME, planner.done_callback("went_back_home"))  # go roughly to the table
+    # joint_mover.lower_arm_to_cart()
+
+    # time.sleep(2)
+
+    # nav.go_to(HOME, planner.done_callback("went_back_home"))  # go roughly to the table

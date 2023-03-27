@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import cv2
+import csv
 import rospy
 import math
 import argparse
@@ -22,13 +24,49 @@ from cv_bridge import CvBridge, CvBridgeError
 from r3m import load_r3m
 from torchvision import transforms
 
+from stretch_learning.srv import Pick,PickResponse
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-r3m = load_r3m("resnet18")
-                                           
+RUNNING = -1
+SUCCESS = 1
+NOT_STARTED = 2
+
+class PickServer:
+    def __init__(self):
+        # skill specific attributes
+        self.skill_name = "pick_pantry"
+        self.model_type = "visuomotor_bc"
+        self.train_type = "end-eff-img-no-rec"
+        
+        self.action_status = NOT_STARTED
+
+        rospy.init_node('pick_server_wrapper')
+        rospy.loginfo("Pick server node created")
+        s = rospy.Service('pick_server', Pick, self.callback)
+        rospy.loginfo("Pick server has started")
+        rospy.spin()
+
+
+    def update_status(self, new_status):
+        if new_status in [RUNNING, SUCCESS]:
+            self.action_status = new_status
+        else:
+            rospy.loginfo("Invalid status from Pick server")
+
+    def callback(self, req):
+        if self.action_status == NOT_STARTED:
+            # call hal_skills
+            start_skills_from_server(self.skill_name, self.model_type, 
+                                     self.train_type, self.update_status)
+            self.action_status = RUNNING
+    
+        return PickResponse(self.action_status)
+
 class HalSkills(hm.HelloNode):
-    def __init__(self, args):
+    def __init__(self, skill_name, model_type, train_type):
         hm.HelloNode.__init__(self)
+        self.debug_mode = False
         self.rate = 10.0
         self.trajectory_client = actionlib.SimpleActionClient('/stretch_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
 
@@ -55,9 +93,9 @@ class HalSkills(hm.HelloNode):
                                     transforms.ToTensor(),
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])            
 
-        self.skill_name = args.skill_name
-        self.model_type = args.model_type
-        self.train_type = args.train_type
+        self.skill_name = skill_name
+        self.model_type = model_type
+        self.train_type = train_type
 
         print("\n\nskill_name: ", self.skill_name)
         print("model_type: ", self.model_type)
@@ -65,16 +103,19 @@ class HalSkills(hm.HelloNode):
         print()
 
         ckpt_dir = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints", 
-                        args.skill_name, args.model_type, args.train_type).expanduser()
-        # ckpt_name = "model_name=0-epoch=221-val_acc=1.00.ckpt"
-        ckpt_name = "last.ckpt"
-        ckpt_path = Path(ckpt_dir, ckpt_name)
+                        self.skill_name, self.model_type, self.train_type).expanduser()
+        ckpts = [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if ckpt.stem != "last"]
+        ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
+        ckpts.sort(key=lambda x: int(x.stem.split("epoch=")[1].split("-val_acc")[0]), reverse=True)
+        ckpt_path = ckpts[0]
+        # ckpt_path = Path(ckpt_dir, "last.ckpt")
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
-        if "trained" in args.train_type:
+        if "trained" in self.train_type:
             self.model = BC_Trained.load_from_checkpoint(ckpt_path)
         else:
             self.model = BC.load_from_checkpoint(ckpt_path)
         self.model.eval()
+        
 
     def joint_states_callback(self, msg):
         self.joint_states = msg
@@ -89,8 +130,8 @@ class HalSkills(hm.HelloNode):
 
     def image_callback(self, ros_rgb_image):
         try:
-            raw_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, 'bgr8')
-            self.rbg_image = self.img_transform(raw_image)
+            self.raw_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, 'bgr8')
+            self.rbg_image = self.img_transform(self.raw_image)
             self.rbg_image = self.rbg_image.unsqueeze(0)
         except CvBridgeError as error:
             print(error)
@@ -352,18 +393,81 @@ class HalSkills(hm.HelloNode):
             return True
         return False
 
+    #-----------------open_drawer() initial configs-----------------#
+    def move_arm_open_drawer(self):
+        rospy.loginfo("Set arm")
+        self.gripper_finger = self.joint_states.name.index("joint_gripper_finger_left")
+        self.wrist_ext_indx = self.joint_states.name.index("joint_arm_l3")
+        self.place_starting_extension = 0.01
+        pose = {'wrist_extension': 0.01,
+                'joint_lift': 0.451,
+                'joint_wrist_pitch': -0.3076,
+                'joint_wrist_yaw': 0.0}
+        self.move_to_pose(pose)
+        return True
+
+    def move_head_open_drawer(self):
+        tilt = -0.7673
+        pan = -1.835
+        rospy.loginfo("Set head pan")
+        pose = {'joint_head_pan': pan, 'joint_head_tilt': tilt}
+        self.move_to_pose(pose)
+        return True
+
+    def open_drawer_initial_config(self, rate):
+        done_head_pan = False
+        while not done_head_pan:
+            if self.joint_states:
+                done_head_pan = self.move_head_open_drawer()
+            rate.sleep()
+        done_initial_config = False
+        while not done_initial_config:
+            if self.joint_states:        
+                done_initial_config = self.move_arm_open_drawer()
+            rate.sleep()
 
 
-    def main(self):
+    def start(self):
         rospy.init_node("hal_skills_node")
         self.node_name = rospy.get_name()
         rospy.loginfo("{0} started".format(self.node_name))
+
+        self.action_status = NOT_STARTED
+
+        s = rospy.Service('pick_server', Pick, self.callback)
+        rospy.loginfo("Pick server has started")
+        rospy.spin()
+
+    def callback(self, req):
+        if self.action_status == NOT_STARTED:
+            # call hal_skills
+            self.action_status = RUNNING
+
+            self.main()
+            
+        return PickResponse(self.action_status)
+
+    def main(self):
+        # rospy.init_node("hal_skills_node")
+        # self.node_name = rospy.get_name()
+        # rospy.loginfo("{0} started".format(self.node_name))
 
         self.joint_states_subscriber = rospy.Subscriber('/stretch/joint_states', JointState, self.joint_states_callback)
         self.rgb_image_subscriber = message_filters.Subscriber('/camera/color/image_raw', Image)
         self.rgb_image_subscriber.registerCallback(self.image_callback)
 
         rate = rospy.Rate(self.rate)
+        
+        if self.debug_mode:
+            print("\n\n********IN DEBUG MODE**********\n\n")
+            cwd = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning"
+            csv_path = Path(cwd, "kp.csv")
+            img_dir = Path(cwd, "images")
+            if not img_dir.exists():
+                img_dir.mkdir()
+            else:
+                for img in img_dir.glob("*.png"):
+                    img.unlink()
 
         # get hal to starting position for pick
         if self.skill_name == "pick_pantry":
@@ -372,24 +476,39 @@ class HalSkills(hm.HelloNode):
             self.pick_table_initial_config(rate)
         elif self.skill_name ==  "place_table":
             self.place_table_initial_config(rate)
+        elif self.skill_name == "open_drawer":
+            self.open_drawer_initial_config(rate)
 
 
+        keypresses = []
+        img_count = 0
         while not rospy.is_shutdown():
             if self.joint_states is not None and self.rbg_image is not None:
                 # check delta to determine skill termination
                 if "pick" in self.skill_name and self.check_pick_termination():
                     rospy.loginfo("\n\n***********Pick Completed***********\n\n")
-                    return 0
+                    self.action_status=SUCCESS
+                    return 1
                 elif "place" in self.skill_name and self.check_place_termination():
                     rospy.loginfo("\n\n***********Place Completed***********\n\n")
-                    return 0
-
+                    self.action_status=SUCCESS
+                    return 1 
+                
                 # if not, continue with next command
                 if len(self.joint_states_data.size()) <= 1:
                     print(self.joint_states_data)
                 prediction = self.model(self.rbg_image, self.joint_states_data)
                 keypressed_index = torch.argmax(prediction).item()
                 keypressed = self.index_to_keypressed(keypressed_index)
+
+                if self.debug_mode:
+                    img_count += 1
+                    img_path = Path(img_dir, f"{img_count:04}.jpg")
+                    cv2.imwrite(str(img_path), self.raw_image)
+                    keypresses.append(str(keypressed_index))
+                    with open(csv_path, "w", encoding="UTF8", newline="") as f:
+                        writer = csv.writer(f)
+                        writer.writerows(keypresses)
 
                 if keypressed == "_":
                     # noop
@@ -402,10 +521,10 @@ class HalSkills(hm.HelloNode):
             rate.sleep()
 
 def get_args():
-    supported_skills = ["pick_pantry", "place_table"]
+    supported_skills = ["pick_pantry", "place_table", "open_drawer"]
     supported_models = ["visuomotor_bc"]
     supported_types = ["reg", "reg-no-vel", "end-eff", "end-eff-img", "end-eff-img-comp-2", \
-                       "ee-img-trained", "ee-ic2-trained"]
+                       "ee-img-trained", "ee-ic2-trained", "end-eff-img-no-rec"]
 
     parser = argparse.ArgumentParser(description="main_lighting")
     parser.add_argument("--skill_name", type=str, choices=supported_skills, default="pick")
@@ -415,5 +534,10 @@ def get_args():
 
 
 if __name__ == '__main__':
-    node = HalSkills(get_args())
-    node.main()
+    args = get_args()
+    skill_name = args.skill_name
+    model_type = args.model_type
+    train_type = args.train_type
+
+    node = HalSkills(skill_name, model_type, train_type)
+    node.start()
