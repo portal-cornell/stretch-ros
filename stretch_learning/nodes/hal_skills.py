@@ -32,36 +32,35 @@ RUNNING = -1
 SUCCESS = 1
 NOT_STARTED = 2
 
-class PickServer:
-    def __init__(self):
-        # skill specific attributes
-        self.skill_name = "pick_pantry"
-        self.model_type = "visuomotor_bc"
-        self.train_type = "end-eff-img-no-rec"
+# class PickServer:
+#     def __init__(self):
+#         # skill specific attributes
+#         self.skill_name = "pick_pantry"
+#         self.model_type = "visuomotor_bc"
+#         self.train_type = "end-eff-img-no-rec"
         
-        self.action_status = NOT_STARTED
+#         self.action_status = NOT_STARTED
 
-        rospy.init_node('pick_server_wrapper')
-        rospy.loginfo("Pick server node created")
-        s = rospy.Service('pick_server', Pick, self.callback)
-        rospy.loginfo("Pick server has started")
-        rospy.spin()
+#         rospy.init_node('pick_server_wrapper')
+#         rospy.loginfo("Pick server node created")
+#         s = rospy.Service('pick_server', Pick, self.callback)
+#         rospy.loginfo("Pick server has started")
+#         rospy.spin()
 
 
-    def update_status(self, new_status):
-        if new_status in [RUNNING, SUCCESS]:
-            self.action_status = new_status
-        else:
-            rospy.loginfo("Invalid status from Pick server")
+#     def update_status(self, new_status):
+#         if new_status in [RUNNING, SUCCESS]:
+#             self.action_status = new_status
+#         else:
+#             rospy.loginfo("Invalid status from Pick server")
 
-    def callback(self, req):
-        if self.action_status == NOT_STARTED:
-            # call hal_skills
-            start_skills_from_server(self.skill_name, self.model_type, 
-                                     self.train_type, self.update_status)
-            self.action_status = RUNNING
-    
-        return PickResponse(self.action_status)
+#     def callback(self, req):
+#         if self.action_status == NOT_STARTED:
+#             # call hal_skills
+#             self.action_status = RUNNING
+#             self.main()
+
+#         return PickResponse(self.action_status)
 
 class HalSkills(hm.HelloNode):
     def __init__(self, skill_name, model_type, train_type):
@@ -106,7 +105,7 @@ class HalSkills(hm.HelloNode):
                         self.skill_name, self.model_type, self.train_type).expanduser()
         ckpts = [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if ckpt.stem != "last"]
         ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
-        ckpts.sort(key=lambda x: int(x.stem.split("epoch=")[1].split("-val_acc")[0]), reverse=True)
+        # ckpts.sort(key=lambda x: int(x.stem.split("epoch=")[1].split("-val_acc")[0]), reverse=True)
         ckpt_path = ckpts[0]
         # ckpt_path = Path(ckpt_dir, "last.ckpt")
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
@@ -115,6 +114,13 @@ class HalSkills(hm.HelloNode):
         else:
             self.model = BC.load_from_checkpoint(ckpt_path)
         self.model.eval()
+
+        self.init_node()
+
+    def init_node(self):
+        rospy.init_node("hal_skills_node")
+        self.node_name = rospy.get_name()
+        rospy.loginfo("{0} started".format(self.node_name))
         
 
     def joint_states_callback(self, msg):
@@ -360,7 +366,7 @@ class HalSkills(hm.HelloNode):
         self.wrist_ext_indx = self.joint_states.name.index("joint_arm_l3")
         self.place_starting_extension = 0.01
         pose = {'wrist_extension': 0.01,
-                'joint_lift': 0.9589,
+                'joint_lift': 0.9769,
                 'joint_wrist_pitch': 0.1948,
                 'joint_wrist_yaw': -0.089}
         self.move_to_pose(pose)
@@ -388,8 +394,8 @@ class HalSkills(hm.HelloNode):
 
     def check_place_termination(self):
         # TODO place termination should also have a arm extension perhaps
-        self.gripper_finger = self.joint_states.name.index("joint_gripper_finger_left")
-        if self.joint_states.position[self.gripper_finger] > 0.19:
+        if self.joint_states.position[self.gripper_finger] > 0.19 \
+            and self.joint_states.position[self.wrist_ext_indx]*4 > 0.04812*4:
             return True
         return False
 
@@ -407,7 +413,7 @@ class HalSkills(hm.HelloNode):
         return True
 
     def move_head_open_drawer(self):
-        tilt = -0.7673
+        tilt = -0.8673
         pan = -1.835
         rospy.loginfo("Set head pan")
         pose = {'joint_head_pan': pan, 'joint_head_tilt': tilt}
@@ -428,10 +434,6 @@ class HalSkills(hm.HelloNode):
 
 
     def start(self):
-        rospy.init_node("hal_skills_node")
-        self.node_name = rospy.get_name()
-        rospy.loginfo("{0} started".format(self.node_name))
-
         self.action_status = NOT_STARTED
 
         s = rospy.Service('pick_server', Pick, self.callback)
@@ -442,6 +444,9 @@ class HalSkills(hm.HelloNode):
         if self.action_status == NOT_STARTED:
             # call hal_skills
             self.action_status = RUNNING
+            
+            if not req.is_pick:
+                self.skill_name = "place_table"
 
             self.main()
             
@@ -472,12 +477,13 @@ class HalSkills(hm.HelloNode):
         # get hal to starting position for pick
         if self.skill_name == "pick_pantry":
             self.pick_pantry_initial_config(rate)
-        elif self.skill_name == "pick_table":
-            self.pick_table_initial_config(rate)
         elif self.skill_name ==  "place_table":
+            print("HERE")
             self.place_table_initial_config(rate)
         elif self.skill_name == "open_drawer":
             self.open_drawer_initial_config(rate)
+        else:
+            raise NotImplementedError
 
 
         keypresses = []
@@ -523,13 +529,12 @@ class HalSkills(hm.HelloNode):
 def get_args():
     supported_skills = ["pick_pantry", "place_table", "open_drawer"]
     supported_models = ["visuomotor_bc"]
-    supported_types = ["reg", "reg-no-vel", "end-eff", "end-eff-img", "end-eff-img-comp-2", \
-                       "ee-img-trained", "ee-ic2-trained", "end-eff-img-no-rec"]
+    supported_types = ["reg", "reg-no-vel", "end-eff", "end-eff-img", "end-eff-img_ft"]
 
     parser = argparse.ArgumentParser(description="main_lighting")
     parser.add_argument("--skill_name", type=str, choices=supported_skills, default="pick")
     parser.add_argument("--model_type", type=str, choices=supported_models, default="visuomotor_bc")
-    parser.add_argument("--train_type", type=str, choices=supported_types, default="reg")
+    parser.add_argument("--train_type", type=str, choices=supported_types, default="end-eff-img")
     return parser.parse_args(rospy.myargv()[1:])
 
 
@@ -540,4 +545,5 @@ if __name__ == '__main__':
     train_type = args.train_type
 
     node = HalSkills(skill_name, model_type, train_type)
-    node.start()
+    # node.start()
+    node.main()

@@ -1,5 +1,6 @@
 #request constants
 string loc
+bool is_pick
 ---
 #response constants
 int8 status

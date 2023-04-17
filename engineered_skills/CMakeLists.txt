@@ -65,6 +65,8 @@ find_package(catkin REQUIRED COMPONENTS
 add_service_files(
   FILES
   MoveAction.srv
+  Move.srv
+  Speech.srv
 )
 
 ## Generate actions in the 'action' folder
@@ -168,6 +170,7 @@ include_directories(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   nodes/dummy_action.py
+  nodes/move.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
