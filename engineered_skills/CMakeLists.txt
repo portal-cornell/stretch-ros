@@ -67,6 +67,7 @@ add_service_files(
   MoveAction.srv
   Move.srv
   Speech.srv
+  Place.srv
 )
 
 ## Generate actions in the 'action' folder

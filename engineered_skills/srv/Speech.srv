@@ -1,0 +1,5 @@
+#request constants
+string speech_text
+---
+#response constants
+int8 status

@@ -1,0 +1,5 @@
+#request constants
+string loc
+---
+#response constants
+int8 status

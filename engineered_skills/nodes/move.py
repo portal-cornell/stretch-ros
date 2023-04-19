@@ -30,9 +30,9 @@ from engineered_skills.srv import Move,MoveResponse
 
 locations = {
 "HOME": (0.0, 0.0, 0.0),
-"TABLE": (1.98, -.782, math.pi/2),
-"SALT": (0.3, -1.73, -1*math.pi/2),
-"PEPPER": (0.3, -2.39, -1*math.pi/2)
+"TABLE": (1.9, -.782, math.pi/2),
+"SALT": (0.26, -1.73, -1*math.pi/2),
+"PEPPER": (0.26, -2.39, -1*math.pi/2)
 }
 
 MOVE_WITH_CART_POSE = (-0.397, 0.024, 0.5)
@@ -126,7 +126,7 @@ if __name__ == '__main__':
     TO RUN:
 
     1. In one terminal:
-        roslaunch engineered_skills move.launch map_yaml:=${HELLO_FLEET_PATH}/maps/spring2023demo.yaml
+        roslaunch engineered_skills demo_sp23.launch map_yaml:=${HELLO_FLEET_PATH}/maps/spring2023demo.yaml
 
     2. Then run:
         python3 /home/strech/catkin_ws/src/stretch_ros/engineered_skills/nodes/move.py

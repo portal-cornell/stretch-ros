@@ -12,8 +12,8 @@ from model_bc import BC
 from model_bc_trained import BC as BC_Trained
 from sensor_msgs.msg import JointState
 from sensor_msgs.msg import Image
-from control_msgs.msg import FollowJointTrajectoryGoal, FollowJointTrajectoryAction
 from trajectory_msgs.msg import JointTrajectoryPoint
+from control_msgs.msg import FollowJointTrajectoryGoal, FollowJointTrajectoryAction
 import hello_helpers.hello_misc as hm
 
 import torch
@@ -106,9 +106,10 @@ class HalSkills(hm.HelloNode):
         ckpts = [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if ckpt.stem != "last"]
         ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
         # ckpts.sort(key=lambda x: int(x.stem.split("epoch=")[1].split("-val_acc")[0]), reverse=True)
-        ckpt_path = ckpts[0]
+        ckpt_path = ckpts[1]
         # ckpt_path = Path(ckpt_dir, "last.ckpt")
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
+
         if "trained" in self.train_type:
             self.model = BC_Trained.load_from_checkpoint(ckpt_path)
         else:
@@ -444,11 +445,9 @@ class HalSkills(hm.HelloNode):
         if self.action_status == NOT_STARTED:
             # call hal_skills
             self.action_status = RUNNING
-            
             if not req.is_pick:
                 self.skill_name = "place_table"
-
-            self.main()
+        self.main()
             
         return PickResponse(self.action_status)
 
@@ -478,7 +477,6 @@ class HalSkills(hm.HelloNode):
         if self.skill_name == "pick_pantry":
             self.pick_pantry_initial_config(rate)
         elif self.skill_name ==  "place_table":
-            print("HERE")
             self.place_table_initial_config(rate)
         elif self.skill_name == "open_drawer":
             self.open_drawer_initial_config(rate)
@@ -503,6 +501,8 @@ class HalSkills(hm.HelloNode):
                 # if not, continue with next command
                 if len(self.joint_states_data.size()) <= 1:
                     print(self.joint_states_data)
+                    continue
+
                 prediction = self.model(self.rbg_image, self.joint_states_data)
                 keypressed_index = torch.argmax(prediction).item()
                 keypressed = self.index_to_keypressed(keypressed_index)
@@ -529,9 +529,10 @@ class HalSkills(hm.HelloNode):
 def get_args():
     supported_skills = ["pick_pantry", "place_table", "open_drawer"]
     supported_models = ["visuomotor_bc"]
-    supported_types = ["reg", "reg-no-vel", "end-eff", "end-eff-img", "end-eff-img_ft"]
+    supported_types = ["reg", "reg-no-vel", "end-eff", "end-eff-img", "end-eff-img-ft",
+                       "bc_top", "bc_all", "bc_oracle"]
 
-    parser = argparse.ArgumentParser(description="main_lighting")
+    parser = argparse.ArgumentParser(description="main_slighting")
     parser.add_argument("--skill_name", type=str, choices=supported_skills, default="pick")
     parser.add_argument("--model_type", type=str, choices=supported_models, default="visuomotor_bc")
     parser.add_argument("--train_type", type=str, choices=supported_types, default="end-eff-img")
@@ -545,5 +546,5 @@ if __name__ == '__main__':
     train_type = args.train_type
 
     node = HalSkills(skill_name, model_type, train_type)
-    # node.start()
-    node.main()
+    node.start()
+    # node.main()

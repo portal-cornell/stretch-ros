@@ -1,9 +1,9 @@
 <launch>
 
     <!-- list of arguments -->
-    <arg name="skill_name"  default="pick" />
+    <arg name="skill_name"  default="pick_pantry" />
     <arg name="model_type"  default="visuomotor_bc" />
-    <arg name="train_type"  default="reg" />
+    <arg name="train_type"  default="end-eff-img" />
 
     <!-- HAL SKLIL -->
     <node name="hal_skills" pkg="stretch_learning" type="hal_skills.py" output="screen"
