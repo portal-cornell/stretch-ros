@@ -16,7 +16,7 @@ TrajectoryPlannerROS:
   # Goal Tolerance Parameters
   yaw_goal_tolerance: 0.09          # (5 degrees) The tolerance in radians for the controller in yaw/rotation when achieving its goal
   xy_goal_tolerance: 0.10           # (10cm) The tolerance in meters for the controller in the x & y distance when achieving a goal
-  latch_xy_goal_tolerance: false    # If goal tolerance is latched, if the robot ever reaches the goal xy location it will simply rotate in place, even if it ends up outside the goal tolerance while it is doing so.
+  latch_xy_goal_tolerance: true    # If goal tolerance is latched, if the robot ever reaches the goal xy location it will simply rotate in place, even if it ends up outside the goal tolerance while it is doing so.
 
 
   # forward simulation

@@ -51,7 +51,7 @@ class PlaceObjectNode(hm.HelloNode):
 
         # limiting params
         self.min_lift = 0.3
-        self.max_lift = 1.0
+        self.max_lift = 1.1
         self.min_extension = 0.01
         self.max_extension = 0.5
         self.gripper_close = -0.30
@@ -61,7 +61,7 @@ class PlaceObjectNode(hm.HelloNode):
         self.translate = 0.04
         self.gripper_len = 0.25
 
-        self.arm_ext_target = 0.0967 * 4
+        self.arm_ext_target = 0.10 * 4
         self.arm_lower_target = 0.9505
 
     def init_node(self):
@@ -98,7 +98,7 @@ class PlaceObjectNode(hm.HelloNode):
     def move_to_initial_configuration(self):
         rospy.loginfo("Set arm")
         pose = {'wrist_extension': 0.01,
-                'joint_lift': 1.000,
+                'joint_lift': 1.5,
                 'joint_wrist_pitch': 0.1948,
                 'joint_wrist_yaw': -0.089}
         self.move_to_pose(pose)
@@ -126,7 +126,7 @@ class PlaceObjectNode(hm.HelloNode):
     def extend_arm(self):
         pose = {'wrist_extension': self.arm_ext_target}
         self.move_to_pose(pose)
-        rospy.sleep(2)
+        rospy.sleep(2.5)
         return True
 
     def lower_arm(self):
@@ -173,6 +173,10 @@ class PlaceObjectNode(hm.HelloNode):
         self.action_status=SUCCESS
         return 1 
 
+    def start_no_service(self):
+        self.init_node()
+        rospy.loginfo("Place server has started, not waiting on service")
+        self.main()
 
 
 if __name__ == '__main__':
@@ -180,5 +184,7 @@ if __name__ == '__main__':
         parser = ArgumentParser()
         node = PlaceObjectNode()
         node.start()
+
+        # node.start_no_service()
     except KeyboardInterrupt:
         rospy.loginfo('Interrupt received, shutting down.')

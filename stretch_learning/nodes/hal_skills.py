@@ -32,35 +32,6 @@ RUNNING = -1
 SUCCESS = 1
 NOT_STARTED = 2
 
-# class PickServer:
-#     def __init__(self):
-#         # skill specific attributes
-#         self.skill_name = "pick_pantry"
-#         self.model_type = "visuomotor_bc"
-#         self.train_type = "end-eff-img-no-rec"
-        
-#         self.action_status = NOT_STARTED
-
-#         rospy.init_node('pick_server_wrapper')
-#         rospy.loginfo("Pick server node created")
-#         s = rospy.Service('pick_server', Pick, self.callback)
-#         rospy.loginfo("Pick server has started")
-#         rospy.spin()
-
-
-#     def update_status(self, new_status):
-#         if new_status in [RUNNING, SUCCESS]:
-#             self.action_status = new_status
-#         else:
-#             rospy.loginfo("Invalid status from Pick server")
-
-#     def callback(self, req):
-#         if self.action_status == NOT_STARTED:
-#             # call hal_skills
-#             self.action_status = RUNNING
-#             self.main()
-
-#         return PickResponse(self.action_status)
 
 class HalSkills(hm.HelloNode):
     def __init__(self, skill_name, model_type, train_type):
@@ -102,11 +73,25 @@ class HalSkills(hm.HelloNode):
         print()
 
         ckpt_dir = Path(f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints", 
-                        self.skill_name, self.model_type, self.train_type).expanduser()
-        ckpts = [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if ckpt.stem != "last"]
-        ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
-        # ckpts.sort(key=lambda x: int(x.stem.split("epoch=")[1].split("-val_acc")[0]), reverse=True)
-        ckpt_path = ckpts[1]
+                            self.skill_name, self.model_type, self.train_type).expanduser()
+        if self.model_type == "visuomotor_bc":
+            model = self.load_bc_model(ckpt_dir)
+        elif self.model_type == "iql":
+            model = self.load_iql_model(ckpt_dir)
+
+        self.init_node()
+
+    def load_iql_model(ckpt_dir):
+
+
+    def load_bc_model(self, ckpt_dir):
+        ckpts = [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if "last" not in ckpt.stem]
+        if "val_acc" in str(ckpts[0]):
+            ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
+        else:
+            ckpts.sort(key=lambda x: float(x.stem.split("combined_acc=")[1]), reverse=True)
+
+        ckpt_path = ckpts[3]
         # ckpt_path = Path(ckpt_dir, "last.ckpt")
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
 
@@ -115,8 +100,6 @@ class HalSkills(hm.HelloNode):
         else:
             self.model = BC.load_from_checkpoint(ckpt_path)
         self.model.eval()
-
-        self.init_node()
 
     def init_node(self):
         rospy.init_node("hal_skills_node")
@@ -474,7 +457,7 @@ class HalSkills(hm.HelloNode):
                     img.unlink()
 
         # get hal to starting position for pick
-        if self.skill_name == "pick_pantry":
+        if self.skill_name == "pick_pantry" or self.skill_name == "pick_pepper":
             self.pick_pantry_initial_config(rate)
         elif self.skill_name ==  "place_table":
             self.place_table_initial_config(rate)
@@ -527,15 +510,15 @@ class HalSkills(hm.HelloNode):
             rate.sleep()
 
 def get_args():
-    supported_skills = ["pick_pantry", "place_table", "open_drawer"]
-    supported_models = ["visuomotor_bc"]
+    supported_skills = ["pick_pantry", "place_table", "open_drawer", "pick_pepper"]
+    supported_models = ["visuomotor_bc", "iql"]
     supported_types = ["reg", "reg-no-vel", "end-eff", "end-eff-img", "end-eff-img-ft",
                        "bc_top", "bc_all", "bc_oracle"]
 
     parser = argparse.ArgumentParser(description="main_slighting")
-    parser.add_argument("--skill_name", type=str, choices=supported_skills, default="pick")
+    parser.add_argument("--skill_name", type=str, choices=supported_skills, default="pick_pantry")
     parser.add_argument("--model_type", type=str, choices=supported_models, default="visuomotor_bc")
-    parser.add_argument("--train_type", type=str, choices=supported_types, default="end-eff-img")
+    parser.add_argument("--train_type", type=str, choices=supported_types, default="bc_oracle")
     return parser.parse_args(rospy.myargv()[1:])
 
 
