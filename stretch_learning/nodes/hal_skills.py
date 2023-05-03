@@ -12,6 +12,7 @@ from sensor_msgs.msg import JointState
 from sensor_msgs.msg import Image
 from trajectory_msgs.msg import JointTrajectoryPoint
 from control_msgs.msg import FollowJointTrajectoryGoal, FollowJointTrajectoryAction
+from custom_msg_python.msg import Keypressed
 import hello_helpers.hello_misc as hm
 
 import torch
@@ -202,12 +203,21 @@ class HalSkills(hm.HelloNode):
         return deltas
 
     def get_command(self, c):
+        keypressed_publisher = rospy.Publisher("key_pressed", Keypressed, queue_size=20)
+        rospy.Rate(1)
+        msg = Keypressed()
+        msg.timestamp = (str)(rospy.get_rostime().to_nsec())
+
         # 8 or up arrow
         if c == "8" or c == "\x1b[A":
             command = {"joint": "joint_lift", "delta": self.get_deltas()["translate"]}
+            msg.keypressed = "8"
+            keypressed_publisher.publish(msg)
         # 2 or down arrow
         if c == "2" or c == "\x1b[B":
             command = {"joint": "joint_lift", "delta": -self.get_deltas()["translate"]}
+            msg.keypressed = "2"
+            keypressed_publisher.publish(msg)
         if self.mode == "manipulation":
             # 4 or left arrow
             if c == "4" or c == "\x1b[D":
@@ -215,12 +225,16 @@ class HalSkills(hm.HelloNode):
                     "joint": "joint_mobile_base_translation",
                     "delta": self.get_deltas()["translate"],
                 }
+                msg.keypressed = "4"
+                keypressed_publisher.publish(msg)
             # 6 or right arrow
             if c == "6" or c == "\x1b[C":
                 command = {
                     "joint": "joint_mobile_base_translation",
                     "delta": -self.get_deltas()["translate"],
                 }
+                msg.keypressed = "6"
+                keypressed_publisher.publish(msg)
         elif self.mode == "position":
             # 4 or left arrow
             if c == "4" or c == "\x1b[D":
@@ -228,24 +242,32 @@ class HalSkills(hm.HelloNode):
                     "joint": "translate_mobile_base",
                     "inc": self.get_deltas()["translate"],
                 }
+                msg.keypressed = "4"
+                keypressed_publisher.publish(msg)
             # 6 or right arrow
             if c == "6" or c == "\x1b[C":
                 command = {
                     "joint": "translate_mobile_base",
                     "inc": -self.get_deltas()["translate"],
                 }
+                msg.keypressed = "6"
+                keypressed_publisher.publish(msg)
             # 1 or end key
             if c == "7" or c == "\x1b[H":
                 command = {
                     "joint": "rotate_mobile_base",
                     "inc": self.get_deltas()["rad"],
                 }
+                msg.keypressed = "7"
+                keypressed_publisher.publish(msg)
             # 3 or pg down 5~
             if c == "9" or c == "\x1b[5":
                 command = {
                     "joint": "rotate_mobile_base",
                     "inc": -self.get_deltas()["rad"],
                 }
+                msg.keypressed = "9"
+                keypressed_publisher.publish(msg)
         elif self.mode == "navigation":
             rospy.loginfo("ERROR: Navigation mode is not currently supported.")
 
@@ -254,64 +276,106 @@ class HalSkills(hm.HelloNode):
                 "joint": "wrist_extension",
                 "delta": self.get_deltas()["translate"],
             }
+            msg.keypressed = "w"
+            keypressed_publisher.publish(msg)
         if c == "x" or c == "X":
             command = {
                 "joint": "wrist_extension",
                 "delta": -self.get_deltas()["translate"],
             }
+            msg.keypressed = "x"
+            keypressed_publisher.publish(msg)
         if c == "d" or c == "D":
             command = {"joint": "joint_wrist_yaw", "delta": -self.get_deltas()["rad"]}
+            msg.keypressed = "d"
+            keypressed_publisher.publish(msg)
         if c == "a" or c == "A":
             command = {"joint": "joint_wrist_yaw", "delta": self.get_deltas()["rad"]}
+            msg.keypressed = "a"
+            keypressed_publisher.publish(msg)
         if c == "v" or c == "V":
             command = {"joint": "joint_wrist_pitch", "delta": -self.get_deltas()["rad"]}
+            msg.keypressed = "v"
+            keypressed_publisher.publish(msg)
         if c == "c" or c == "C":
             command = {"joint": "joint_wrist_pitch", "delta": self.get_deltas()["rad"]}
+            msg.keypressed = "c"
+            keypressed_publisher.publish(msg)
         if c == "p" or c == "P":
             command = {"joint": "joint_wrist_roll", "delta": -self.get_deltas()["rad"]}
+            msg.keypressed = "p"
+            keypressed_publisher.publish(msg)
         if c == "o" or c == "O":
             command = {"joint": "joint_wrist_roll", "delta": self.get_deltas()["rad"]}
+            msg.keypressed = "o"
+            keypressed_publisher.publish(msg)
         if c == "5" or c == "\x1b[E" or c == "g" or c == "G":
             # grasp
             command = {
                 "joint": "joint_gripper_finger_left",
                 "delta": -self.get_deltas()["rad"],
             }
+            msg.keypressed = "5"
+            keypressed_publisher.publish(msg)
         if c == "0" or c == "\x1b[2" or c == "r" or c == "R":
             # release
             command = {
                 "joint": "joint_gripper_finger_left",
                 "delta": self.get_deltas()["rad"],
             }
+            msg.keypressed = "0"
+            keypressed_publisher.publish(msg)
         if c == "i" or c == "I":
+            # head up
             command = {
                 "joint": "joint_head_tilt",
                 "delta": (2.0 * self.get_deltas()["rad"]),
             }
+            msg.keypressed = "i"
+            keypressed_publisher.publish(msg)
         if c == "," or c == "<":
+            # head down
             command = {
                 "joint": "joint_head_tilt",
                 "delta": -(2.0 * self.get_deltas()["rad"]),
             }
+            msg.keypressed = ","
+            keypressed_publisher.publish(msg)
         if c == "j" or c == "J":
             command = {
                 "joint": "joint_head_pan",
                 "delta": (2.0 * self.get_deltas()["rad"]),
             }
+            msg.keypressed = "j"
+            keypressed_publisher.publish(msg)
         if c == "l" or c == "L":
             command = {
                 "joint": "joint_head_pan",
                 "delta": -(2.0 * self.get_deltas()["rad"]),
             }
+            msg.keypressed = "l"
+            keypressed_publisher.publish(msg)
         if c == "b" or c == "B":
             rospy.loginfo("process_keyboard.py: changing to BIG step size")
             self.step_size = "big"
+            msg.keypressed = "b"
+            keypressed_publisher.publish(msg)
         if c == "m" or c == "M":
             rospy.loginfo("process_keyboard.py: changing to MEDIUM step size")
             self.step_size = "medium"
+            msg.keypressed = "m"
+            keypressed_publisher.publish(msg)
         if c == "s" or c == "S":
             rospy.loginfo("process_keyboard.py: changing to SMALL step size")
             self.step_size = "small"
+            msg.keypressed = "s"
+            keypressed_publisher.publish(msg)
+        if c == "q" or c == "Q":
+            rospy.loginfo("keyboard_teleop exiting...")
+            rospy.signal_shutdown("Received quit character (q), so exiting")
+
+        ####################################################
+
         return command
 
     def send_command(self, command):
