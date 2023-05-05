@@ -43,9 +43,9 @@ class ImageJointStateNet(nn.Module):
 
         img = self.conv_net(img)
         img_t = self.img_squeeze_linear(img)
-        js_ee_t = torch.zeros_like(js_ee)  # don't use joint_states
-        js_ee_t[-END_EFF_DIMS:] = js_ee[-END_EFF_DIMS:]
-        x = torch.cat((img_t, js_ee_t), dim=1)
+        # js_ee_t = torch.zeros_like(js_ee)  # don't use joint_states
+        # js_ee_t[-END_EFF_DIMS:] = js_ee[-END_EFF_DIMS:]
+        x = torch.cat((img_t, js_ee), dim=1)
         return x
 
     def load_from_bc(self, bc_state_dict):

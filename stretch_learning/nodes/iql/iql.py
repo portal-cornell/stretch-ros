@@ -17,14 +17,12 @@ LOG_STD_MIN = -5.0
 LOG_STD_MAX = 2.0
 
 
-def load_iql_trainer(device):
-    img_comp_dim = 64
+def load_iql_trainer(device, img_comp_dim, n_hidden):
     img_js_net = ImageJointStateNet(img_comp_dim=img_comp_dim)
 
     # constants
     state_dim = img_js_net.output_dim
     action_dim = KEYBOARD_ACTIONS
-    n_hidden = 3
     max_action = 1
 
     # hyperparameters (will be overwritten by ckpt)

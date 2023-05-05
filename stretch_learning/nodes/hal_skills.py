@@ -99,15 +99,17 @@ class HalSkills(hm.HelloNode):
         self.init_node()
 
     def load_iql_model(self, ckpt_dir):
-        model = load_iql_trainer(device)
+        model = load_iql_trainer(device, img_comp_dim=32, n_hidden=3)
 
         ckpts = [
             ckpt for ckpt in Path(ckpt_dir).glob("*.pt") if "last" not in ckpt.stem
         ]
         ckpts.sort(key=lambda x: float(x.stem.split("_", 3)[2]))
-        ckpt_path = ckpts[-1]
+        ckpt_path = ckpts[1]
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        model.img_js_net.eval()
+        model.actor.eval()
         return model
 
     def load_bc_model(self, ckpt_dir):
@@ -604,7 +606,7 @@ class HalSkills(hm.HelloNode):
                     img.unlink()
 
         # get hal to starting position for pick
-        if self.skill_name == "pick_pantry" or self.skill_name == "pick_pepper":
+        if "pick" in self.skill_name:
             self.pick_pantry_initial_config(rate)
         elif self.skill_name == "place_table":
             self.place_table_initial_config(rate)
@@ -665,7 +667,13 @@ class HalSkills(hm.HelloNode):
 
 
 def get_args():
-    supported_skills = ["pick_pantry", "place_table", "open_drawer", "pick_pepper"]
+    supported_skills = [
+        "pick_pantry",
+        "place_table",
+        "open_drawer",
+        "pick_pepper",
+        "pick_pantry_all",
+    ]
     supported_models = ["visuomotor_bc", "irl"]
     supported_types = [
         # visuomotor_bc
