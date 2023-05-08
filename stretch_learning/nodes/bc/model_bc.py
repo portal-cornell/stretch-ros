@@ -28,22 +28,31 @@ class BC(pl.LightningModule):
         use_joints=True,
         use_end_eff=True,
         compress_img=True,
+        train_resnet=False,
     ):
         super().__init__()
         self.save_hyperparameters()
         self.skill_name = skill_name
         self.batch_size = batch_size
 
-        conv_net_dim = 512
+        if train_resnet:
+            conv_net = torch.hub.load(
+                "pytorch/vision:v0.10.0", "resnet50", weights=None
+            )
+            conv_net_dim = 1000
+        else:
+            conv_net = load_r3m("resnet50")
+            conv_net_dim = 2048
+
         self.conv_net = nn.Sequential(
-            load_r3m("resnet50"),
-            nn.Linear(2048, conv_net_dim),
-            nn.BatchNorm1d(conv_net_dim),
+            conv_net,
+            nn.Linear(conv_net_dim, 512),
+            nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
         )
 
         self.img_squeeze_linear = nn.Sequential(
-            nn.Linear(conv_net_dim, 256),
+            nn.Linear(512, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
             nn.Linear(256, 64),

@@ -99,13 +99,13 @@ class HalSkills(hm.HelloNode):
         self.init_node()
 
     def load_iql_model(self, ckpt_dir):
-        model = load_iql_trainer(device, img_comp_dim=32, n_hidden=3)
+        model = load_iql_trainer(device, img_comp_dim=64, n_hidden=2)
 
         ckpts = [
             ckpt for ckpt in Path(ckpt_dir).glob("*.pt") if "last" not in ckpt.stem
         ]
         ckpts.sort(key=lambda x: float(x.stem.split("_", 3)[2]))
-        ckpt_path = ckpts[1]
+        ckpt_path = ckpts[2]
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
         model.img_js_net.eval()
@@ -563,6 +563,8 @@ class HalSkills(hm.HelloNode):
 
     def start(self):
         self.action_status = NOT_STARTED
+        self.skill_name = "pick_pantry_all"
+        self.train_type = "bc_oracle"
 
         s = rospy.Service("pick_server", Pick, self.callback)
         rospy.loginfo("Pick server has started")
@@ -673,6 +675,7 @@ def get_args():
         "open_drawer",
         "pick_pepper",
         "pick_pantry_all",
+        "pick_whisk",
     ]
     supported_models = ["visuomotor_bc", "irl"]
     supported_types = [
@@ -685,6 +688,8 @@ def get_args():
         "bc_top",
         "bc_all",
         "bc_oracle",
+        "resnet_bc_all",
+        "resnet_bc_oracle",
         # irl
         "iql",
     ]
