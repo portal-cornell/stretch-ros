@@ -22,7 +22,7 @@ from cv_bridge import CvBridge, CvBridgeError
 
 # BC imports
 from r3m import load_r3m
-from bc.model_bc import BC
+from bc.model import BC
 
 # from bc.model_bc_trained import BC as BC_Trained
 
@@ -91,6 +91,14 @@ class HalSkills(hm.HelloNode):
             self.train_type,
         ).expanduser()
 
+        # _id = "c56ea4ee"
+        # ckpt_dir = Path(
+        #     f"~/catkin_ws/src/stretch_ros/stretch_learning/checkpoints",
+        #     self.skill_name,
+        #     self.model_type,
+        #     f"{self.train_type}_{_id}",
+        # ).expanduser()
+
         if self.model_type == "visuomotor_bc":
             self.model = self.load_bc_model(ckpt_dir)
         elif self.model_type == "irl" and self.train_type == "iql":
@@ -113,7 +121,7 @@ class HalSkills(hm.HelloNode):
         return model
 
     def load_bc_model(self, ckpt_dir):
-        ckpts = [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if "last" not in ckpt.stem]
+        ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt") if "last" not in ckpt.stem]
         if "val_acc" in str(ckpts[0]):
             ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
         else:
@@ -121,14 +129,23 @@ class HalSkills(hm.HelloNode):
                 key=lambda x: float(x.stem.split("combined_acc=")[1]), reverse=True
             )
 
-        ckpt_path = ckpts[-1]
+        ckpt_path = ckpts[-2]
         # ckpt_path = Path(ckpt_dir, "last.ckpt")
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
 
-        # if "trained" in self.train_type:
-        #     self.model = BC_Trained.load_from_checkpoint(ckpt_path)
-        # else:
-        model = BC.load_from_checkpoint(ckpt_path)
+        model = BC(
+            skill_name=self.skill_name,
+            joint_state_dims=14 * 3,
+            state_action_dims=17,
+            device=device,
+        )
+        state_dict = torch.load(ckpt_path, map_location=device)
+        modified_dict = {}
+        for key, value in state_dict.items():
+            key = key.replace("_orig_mod.", "")
+            modified_dict[key] = value
+        model.load_state_dict(modified_dict)
+        model.to(device)
         model.eval()
         return model
 
