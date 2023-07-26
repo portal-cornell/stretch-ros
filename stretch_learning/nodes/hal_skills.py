@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import time
 import cv2
 import csv
 import rospy
@@ -27,6 +28,7 @@ from bc.model import BC
 # from bc.model_bc_trained import BC as BC_Trained
 
 # IQL imports
+from iql.img_js_net import ImageJointStateNet
 from iql.iql import load_iql_trainer
 
 from stretch_learning.srv import Pick, PickResponse
@@ -59,7 +61,8 @@ class HalSkills(hm.HelloNode):
         self.mode = "navigation"
 
         self.joint_states = None
-        self.rbg_image = None
+        self.wrist_image = None
+        self.head_image = None
         self.joint_states_data = None
         self.cv_bridge = CvBridge()
 
@@ -107,13 +110,31 @@ class HalSkills(hm.HelloNode):
         self.init_node()
 
     def load_iql_model(self, ckpt_dir):
-        model = load_iql_trainer(device, img_comp_dim=64, n_hidden=2)
+        img_comp_dims = 32
+        joint_pos, joint_vel, joint_force = True, True, True
+        img_js_net = ImageJointStateNet(
+            img_comp_dims, joint_pos, joint_vel, joint_force
+        )
+
+        state_dim, action_dim = 32 + 14 * 3 + 3, 17
+        max_action = 1
+        n_hidden = 3
+        iql_deterministic = True
+        model = load_iql_trainer(
+            device,
+            iql_deterministic,
+            state_dim,
+            action_dim,
+            max_action,
+            n_hidden,
+            img_js_net,
+        )
 
         ckpts = [
             ckpt for ckpt in Path(ckpt_dir).glob("*.pt") if "last" not in ckpt.stem
         ]
         ckpts.sort(key=lambda x: float(x.stem.split("_", 3)[2]))
-        ckpt_path = ckpts[2]
+        ckpt_path = ckpts[0]
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
         model.img_js_net.eval()
@@ -121,7 +142,10 @@ class HalSkills(hm.HelloNode):
         return model
 
     def load_bc_model(self, ckpt_dir):
+        print(ckpt_dir)
         ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt") if "last" not in ckpt.stem]
+        ckpts += [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if "last" not in ckpt.stem]
+        # import pdb; pdb.set_trace()
         if "val_acc" in str(ckpts[0]):
             ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
         else:
@@ -129,7 +153,7 @@ class HalSkills(hm.HelloNode):
                 key=lambda x: float(x.stem.split("combined_acc=")[1]), reverse=True
             )
 
-        ckpt_path = ckpts[-2]
+        ckpt_path = ckpts[0]
         # ckpt_path = Path(ckpt_dir, "last.ckpt")
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
 
@@ -138,6 +162,7 @@ class HalSkills(hm.HelloNode):
             joint_state_dims=14 * 3,
             state_action_dims=17,
             device=device,
+            use_joints=False
         )
         state_dict = torch.load(ckpt_path, map_location=device)
         modified_dict = {}
@@ -165,11 +190,18 @@ class HalSkills(hm.HelloNode):
         if len(self.joint_states_data.size()) <= 1:
             self.joint_states_data = self.joint_states_data.unsqueeze(0)
 
-    def image_callback(self, ros_rgb_image):
+    def wrist_image_callback(self, ros_rgb_image):
         try:
-            self.raw_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, "bgr8")
-            self.rbg_image = self.img_transform(self.raw_image)
-            self.rbg_image = self.rbg_image.unsqueeze(0)
+            self.raw_wrist_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, "bgr8")
+            self.wrist_image = self.img_transform(self.raw_wrist_image)
+            self.wrist_image = self.wrist_image.unsqueeze(0)
+        except CvBridgeError as error:
+            print(error)
+    def head_image_callback(self, ros_rgb_image):
+        try:
+            self.raw_head_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, "bgr8")
+            self.head_image = self.img_transform(self.raw_head_image)
+            self.head_image = self.head_image.unsqueeze(0)
         except CvBridgeError as error:
             print(error)
 
@@ -423,7 +455,7 @@ class HalSkills(hm.HelloNode):
     # -----------------pick_pantry() initial configs-----------------#
     def move_arm_pick_pantry(self):
         rospy.loginfo("Set arm")
-        self.pick_starting_height = 0.828
+        self.pick_starting_height = 0.968
         self.joint_lift_index = self.joint_states.name.index("joint_lift")
         pose = {
             "wrist_extension": 0.01,
@@ -455,6 +487,7 @@ class HalSkills(hm.HelloNode):
 
     def pick_pantry_initial_config(self, rate):
         done_head_pan = False
+        # import pdb; pdb.set_trace()
         while not done_head_pan:
             if self.joint_states:
                 done_head_pan = self.move_head_pick_pantry()
@@ -475,7 +508,7 @@ class HalSkills(hm.HelloNode):
             "wrist_extension": 0.01,
             "joint_lift": self.pick_starting_height,
             "joint_wrist_pitch": 0.2,
-            "joint_wrist_yaw": -0.09,
+            # "joint_wrist_yaw": -0.09,
         }
         self.move_to_pose(pose)
         return True
@@ -602,14 +635,18 @@ class HalSkills(hm.HelloNode):
         # rospy.init_node("hal_skills_node")
         # self.node_name = rospy.get_name()
         # rospy.loginfo("{0} started".format(self.node_name))
-
+        print("start of main")
         self.joint_states_subscriber = rospy.Subscriber(
             "/stretch/joint_states", JointState, self.joint_states_callback
         )
-        self.rgb_image_subscriber = message_filters.Subscriber(
-            "/camera/color/image_raw", Image
+        self.wrist_image_subscriber = message_filters.Subscriber(
+            "/wrist_camera/color/image_raw", Image
         )
-        self.rgb_image_subscriber.registerCallback(self.image_callback)
+        self.wrist_image_subscriber.registerCallback(self.wrist_image_callback)
+        self.head_image_subscriber = message_filters.Subscriber(
+            "/head_camera/color/image_raw", Image
+        )
+        self.head_image_subscriber.registerCallback(self.head_image_callback)
 
         rate = rospy.Rate(self.rate)
 
@@ -623,7 +660,7 @@ class HalSkills(hm.HelloNode):
             else:
                 for img in img_dir.glob("*.png"):
                     img.unlink()
-
+        print("start of reset")
         # get hal to starting position for pick
         if "pick" in self.skill_name:
             self.pick_pantry_initial_config(rate)
@@ -633,15 +670,23 @@ class HalSkills(hm.HelloNode):
             self.open_drawer_initial_config(rate)
         else:
             raise NotImplementedError
-
+        print("start of loop")
         keypresses = []
         img_count = 0
+        times = []
         while not rospy.is_shutdown():
-            if self.joint_states is not None and self.rbg_image is not None:
+            print("not shutdown")
+            print("js ===== ", self.joint_states)
+            print("wrist image ===", self.wrist_image)
+            print("head image ===", self.head_image)
+            print(self.wrist_image.shape)
+            print(self.head_image.shape)
+            if self.joint_states is not None and self.wrist_image is not None and self.head_image is not None:
                 # check delta to determine skill termination
                 if "pick" in self.skill_name and self.check_pick_termination():
                     rospy.loginfo("\n\n***********Pick Completed***********\n\n")
                     self.action_status = SUCCESS
+                    print(times)
                     return 1
                 elif "place" in self.skill_name and self.check_place_termination():
                     rospy.loginfo("\n\n***********Place Completed***********\n\n")
@@ -654,15 +699,20 @@ class HalSkills(hm.HelloNode):
                     continue
 
                 if self.model_type == "visuomotor_bc":
-                    prediction = self.model(self.rbg_image, self.joint_states_data)
+                    start = time.time()
+                    prediction = self.model(self.wrist_image, self.joint_states_data, image2=self.head_image)
+                    times.append(time.time() - start)
                 elif self.train_type == "iql":
                     observation = self.model.img_js_net(
-                        self.rbg_image, self.joint_states_data
+                        self.wrist_image, self.joint_states_data
                     )
                     prediction = self.model.actor.act(observation)
                 else:
                     raise NotImplementedError
-                keypressed_index = torch.argmax(prediction).item()
+                # keypressed_index = torch.argmax(prediction).item()
+                prediction = torch.nn.functional.softmax(prediction).flatten()
+                dist = torch.distributions.Categorical(prediction)
+                keypressed_index = dist.sample().item()
                 keypressed = self.index_to_keypressed(keypressed_index)
 
                 if self.debug_mode:
@@ -693,6 +743,8 @@ def get_args():
         "pick_pepper",
         "pick_pantry_all",
         "pick_whisk",
+        "pick_whisk_pantry",
+        "pick_salt",
     ]
     supported_models = ["visuomotor_bc", "irl"]
     supported_types = [

@@ -1,7 +1,7 @@
 <launch>
-
   <!-- REDUCE RATE AND USE NUC TIME -->
   <node name="d435i_accel_correction" pkg="stretch_core" type="d435i_accel_correction" output="screen" />
+  <!-- <node name="$(arg name)" pkg="stretch_core" type="d435i_accel_correction" output="screen" /> -->
 
   <!-- REALSENSE D435i -->
   <include file="$(find realsense2_camera)/launch/rs_camera.launch">
@@ -12,6 +12,11 @@
          https://realsense.intel.com/how-to-getting-imu-data-from-d435i-and-t265/
          https://github.com/intel-ros/realsense
          -->
+
+    <!-- Serial number for head camera: 040322072546
+         Serial number for wrist camera: 233522073925 -->
+    <arg name="serial_no" value="040322072546"/>
+
     <arg name="accel_fps" value="63"/>
     <arg name="gyro_fps" value="200"/>
     <arg name="depth_fps" value="15"/>
