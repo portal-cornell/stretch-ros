@@ -15,6 +15,7 @@ from trajectory_msgs.msg import JointTrajectoryPoint
 from control_msgs.msg import FollowJointTrajectoryGoal, FollowJointTrajectoryAction
 from custom_msg_python.msg import Keypressed
 import hello_helpers.hello_misc as hm
+import torch.nn as nn
 
 import torch
 import numpy as np
@@ -172,17 +173,24 @@ class HalSkills(hm.HelloNode):
                 key=lambda x: float(x.stem.split("combined_acc=")[1]), reverse=True
             )
 
-        ckpt_path = ckpts[0]
+        ckpt_path = ckpts[-4]
         # ckpt_path = Path(ckpt_dir, "last.ckpt")
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
+
+        weights = torch.tensor([1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,10.0,10.0,1.0,1.0,1.0,1.0,1.0,1.0])
+        loss_fn = nn.CrossEntropyLoss(reduction="mean",  weight=weights)
 
         model = BC(
             skill_name=self.skill_name,
             joint_state_dims=14 * 3,
             state_action_dims=17,
             device=device,
-            use_joints=False
+            use_wrist_img=True,
+            use_head_img=False,
+            use_joints=False,
+            loss_fn=loss_fn
         )
+
         state_dict = torch.load(ckpt_path, map_location=device)
         modified_dict = {}
         for key, value in state_dict.items():
@@ -319,7 +327,7 @@ class HalSkills(hm.HelloNode):
 
                 if self.model_type == "visuomotor_bc":
                     start = time.time()
-                    prediction = self.model(self.wrist_image, self.joint_states_data, image2=self.head_image)
+                    prediction = self.model(self.wrist_image, self.head_image, self.joint_states_data)
                     times.append(time.time() - start)
                 elif self.train_type == "iql":
                     observation = self.model.img_js_net(
@@ -372,7 +380,7 @@ def get_args():
 
     parser = argparse.ArgumentParser(description="main_slighting")
     parser.add_argument(
-        "--skill_name", type=str, choices=supported_skills, default="pick_pantry"
+        "--skill_name", type=str, choices=supported_skills, default="pick_salt"
     )
     parser.add_argument(
         "--model_type", type=str, choices=supported_models, default="visuomotor_bc"

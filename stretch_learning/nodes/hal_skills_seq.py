@@ -24,7 +24,7 @@ from cv_bridge import CvBridge, CvBridgeError
 
 # BC imports
 from r3m import load_r3m
-from bc.model import BC
+from bc.seq_model import BC_Seq
 
 # from bc.model_bc_trained import BC as BC_Trained
 
@@ -105,9 +105,9 @@ class HalSkills(hm.HelloNode):
         self.mode = "navigation"
 
         self.joint_states = None
-        self.wrist_image = np.empty(0) 
-        self.head_image = np.empty(0) 
-        self.joint_states_data = np.empty(0)
+        self.wrist_image = torch.empty(0)
+        self.head_image = torch.empty(0)
+        self.joint_states_data = torch.empty(0)
         self.cv_bridge = CvBridge()
 
         self.img_transform = transforms.Compose(
@@ -144,17 +144,6 @@ class HalSkills(hm.HelloNode):
 
         self.init_node()
 
-        ckpts = [
-            ckpt for ckpt in Path(ckpt_dir).glob("*.pt") if "last" not in ckpt.stem
-        ]
-        ckpts.sort(key=lambda x: float(x.stem.split("_", 3)[2]))
-        ckpt_path = ckpts[0]
-        print(f"Loading checkpoint from {str(ckpt_path)}.\n")
-        model.load_state_dict(torch.load(ckpt_path, map_location=device))
-        model.img_js_net.eval()
-        model.actor.eval()
-        return model
-
     def load_bc_model(self, ckpt_dir):
         print(ckpt_dir)
         ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt") if "last" not in ckpt.stem]
@@ -167,16 +156,20 @@ class HalSkills(hm.HelloNode):
                 key=lambda x: float(x.stem.split("combined_acc=")[1]), reverse=True
             )
 
-        ckpt_path = ckpts[0]
+        ckpt_path = ckpts[-1]
         # ckpt_path = Path(ckpt_dir, "last.ckpt")
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
 
-        model = BC(
-            skill_name=self.skill_name,
-            joint_state_dims=14 * 3,
-            state_action_dims=17,
+        model = BC_Seq(
+            skill_name=args.skill_name,
+            joint_state_dims=14*3,
             device=device,
-            use_joints=False
+            use_joints=False,
+            use_wrist_img=True,
+            use_head_img=False,
+            js_modifications="only pick",
+            o_hor=args.o_hor,
+            a_hor=args.a_hor
         )
         state_dict = torch.load(ckpt_path, map_location=device)
         modified_dict = {}
@@ -194,11 +187,13 @@ class HalSkills(hm.HelloNode):
         rospy.loginfo("{0} started".format(self.node_name))
 
     def update_horizon(self, horizon, update):
-        if len(horizon) < args.o_hor:
-            horizon = np.cat(horizon, update)
-        else:
+        update = update.squeeze(0).unsqueeze(0)
+        if len(horizon) == args.o_hor:
             horizon = horizon[1:]
-            horizon = np.concatenate(horizon, update)
+        elif len(horizon) == 0:
+            horizon = update
+            return horizon
+        horizon = torch.cat((horizon, update), axis=0)
         return horizon
 
     def joint_states_callback(self, msg):
@@ -209,7 +204,7 @@ class HalSkills(hm.HelloNode):
         for idx, (name, pos, vel, eff) in enumerate(js_msg):
             js_arr.extend([pos, vel, eff])
         joint_states_data = torch.from_numpy(np.array(js_arr, dtype=np.float32))
-        if len(joint_states_data.size()) <= 1:
+        if len(joint_states_data) <= 1:
             joint_states_data = joint_states_data.unsqueeze(0)
         self.joint_states_data = self.update_horizon(self.joint_states_data, joint_states_data)
 
@@ -253,10 +248,11 @@ class HalSkills(hm.HelloNode):
         #     msg.keypressed = "8"
         #     keypressed_publisher.publish(msg)
         
+        filter = ["wrist_extension_pos", "joint_wrist_yaw_pos", "gripper_aperture_pos", "joint_lift_pos"]
         command = {}
-        for i in len(delta_js):
-            joint_name = joint_labels[i]
-            if abs(delta_js[i]) > 1e-2:
+        for i in range(len(filter)):
+            joint_name = filter[i]
+            if abs(delta_js[i]) > 1e-5 and joint_name in filter:
                 command[joint_name] = delta_js[i]
 
         ####################################################
@@ -274,16 +270,16 @@ class HalSkills(hm.HelloNode):
             trajectory_goal.trajectory.joint_names = []
             trajectory_goal.trajectory.points = []
             for joint_name in command.keys():
-                joint_name = command["joint"]
-                trajectory_goal.trajectory.joint_names.append(joint_name)
-                if "inc" in command:
-                    inc = command["inc"]
-                    new_value = inc
-                elif "delta" in command:
-                    joint_index = joint_state.name.index(joint_name)
-                    joint_value = joint_state.position[joint_index]
-                    delta = command["delta"]
-                    new_value = joint_value + delta
+                delta = command[joint_name]
+                if "_pos" not in joint_name or delta < 1e-3:
+                    continue
+                trajectory_goal.trajectory.joint_names.append(joint_name[:-4])
+
+                joint_index = joint_state.name.index(joint_name[:-4])
+                joint_value = joint_state.position[joint_index]
+                delta = command[joint_name]
+                new_value = joint_value + delta
+                
                 point.positions = [new_value]
                 trajectory_goal.trajectory.points.append(point)
                 trajectory_goal.trajectory.header.stamp = rospy.Time.now()
@@ -365,7 +361,7 @@ class HalSkills(hm.HelloNode):
 
     def check_pick_termination(self):
         curr_height = self.joint_states.position[self.joint_lift_index]
-        if curr_height - self.pick_starting_height > 0.05:
+        if curr_height - self.pick_starting_height > 0.07:
             return True
         return False
 
@@ -508,16 +504,14 @@ class HalSkills(hm.HelloNode):
         else:
             raise NotImplementedError
         print("start of loop")
-        keypresses = []
         img_count = 0
         times = []
+        prediction = torch.empty(0,4)
         while not rospy.is_shutdown():
-            print("not shutdown")
-            print("js ===== ", self.joint_states)
-            print("wrist image ===", self.wrist_image)
-            print("head image ===", self.head_image)
-            print(self.wrist_image.shape)
-            print(self.head_image.shape)
+            # print("not shutdown")
+            # print("js ===== ", self.joint_states_data.shape)
+            # print("wrist image ===", self.wrist_image.shape)
+            # print("head image ===", self.head_image.shape)
             if self.joint_states is not None and self.wrist_image is not None and self.head_image is not None:
                 # check delta to determine skill termination
                 if "pick" in self.skill_name and self.check_pick_termination():
@@ -530,47 +524,31 @@ class HalSkills(hm.HelloNode):
                     self.action_status = SUCCESS
                     return 1
 
-                # if not, continue with next command
-                if len(self.joint_states_data.size()) <= 1:
-                    print(self.joint_states_data)
-                    continue
-
-                if self.model_type == "visuomotor_bc":
-                    start = time.time()
-                    prediction = self.model(self.wrist_image, self.head_image, self.joint_states_data)
-                    times.append(time.time() - start)
-                elif self.train_type == "iql":
-                    observation = self.model.img_js_net(
-                        self.wrist_image, self.joint_states_data
-                    )
-                    prediction = self.model.actor.act(observation)
-                else:
-                    raise NotImplementedError
-                # keypressed_index = torch.argmax(prediction).item()
-                prediction = torch.nn.functional.softmax(prediction).flatten()
-                dist = torch.distributions.Categorical(prediction)
-                keypressed_index = dist.sample().item()
-                keypressed = self.index_to_keypressed(keypressed_index)
-
-                if self.debug_mode:
-                    img_count += 1
-                    img_path = Path(img_dir, f"{img_count:04}.jpg")
-                    cv2.imwrite(str(img_path), self.raw_image)
-                    keypresses.append(str(keypressed_index))
-                    with open(csv_path, "w", encoding="UTF8", newline="") as f:
-                        writer = csv.writer(f)
-                        writer.writerows(keypresses)
-
-                if keypressed == "_":
-                    # noop
-                    print("NOOP")
-                    continue
-                
-                print(f"{rospy.Time().now()}, {keypressed_index=}, {command=}")
-                
-                prediction = prediction.numpy().reshape(args.o_hor, prediction.size // args.o_hor)
-                smooth = scipy.ndimage.gaussian_filter1d(prediction, 1, axis=1)
-                command = self.get_command(smooth[0])
+                if prediction.shape[0] == 0:
+                    if self.model_type == "visuomotor_bc":
+                        start = time.time()
+                        wrist_flat = torch.cat(self.wrist_image.split(1, dim=0), dim=2)
+                        head_flat = torch.cat(self.head_image.split(1, dim=0), dim=2)
+                        js_batch = self.joint_states_data.flatten().unsqueeze(0)
+                        prediction = self.model(wrist_flat, head_flat, js_batch).squeeze(0)
+                        times.append(time.time() - start)
+                    elif self.train_type == "iql":
+                        observation = self.model.img_js_net(
+                            self.wrist_image, self.joint_states_data
+                        )
+                        prediction = self.model.actor.act(observation)
+                    else:
+                        raise NotImplementedError
+                    if self.debug_mode:
+                        img_count += 1
+                        img_path = Path(img_dir, f"{img_count:04}.jpg")
+                        cv2.imwrite(str(img_path), self.raw_image) 
+                    prediction = prediction.numpy().reshape(args.a_hor, prediction.size(0) // args.a_hor)
+                    prediction = prediction[4:]
+                    # prediction = scipy.ndimage.gaussian_filter1d(prediction, 1, axis=1)
+                command = self.get_command(prediction[0])
+                prediction = prediction[1:]
+                print(command)
                 self.send_command(command)
             rate.sleep()
 
@@ -615,7 +593,8 @@ def get_args():
     )
     parser.add_argument(
         "--o_hor", type=int, default=1
-    )oparser.add_argument(
+    )
+    parser.add_argument(
         "--a_hor", type=int, default=1
     )
     return parser.parse_args(rospy.myargv()[1:])
