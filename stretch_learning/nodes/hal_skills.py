@@ -42,7 +42,7 @@ NOT_STARTED = 2
 
 
 class HalSkills(hm.HelloNode):
-    def __init__(self, skill_name, model_type, train_type):
+    def __init__(self, skill_name, model_type, train_type, goal_pos):
         hm.HelloNode.__init__(self)
         self.debug_mode = False
         self.rate = 10.0
@@ -108,6 +108,9 @@ class HalSkills(hm.HelloNode):
         elif self.model_type == "irl" and self.train_type == "iql":
             self.model = self.load_iql_model(ckpt_dir)
 
+        goal_pos = list(map(float, goal_pos))
+        self.goal_tensor = torch.Tensor(goal_pos).to(device)
+
         self.init_node()
 
     def load_iql_model(self, ckpt_dir):
@@ -143,42 +146,40 @@ class HalSkills(hm.HelloNode):
         return model
 
     def load_bc_model(self, ckpt_dir):
-        print(ckpt_dir)
-        ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt") if "last" not in ckpt.stem]
-        ckpts += [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if "last" not in ckpt.stem]
-        # import pdb; pdb.set_trace()
-        if "val_acc" in str(ckpts[0]):
-            ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
-        else:
-            ckpts.sort(
-                key=lambda x: float(x.stem.split("combined_acc=")[1]), reverse=True
-            )
+        # print(ckpt_dir)
+        # ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt") if "last" not in ckpt.stem]
+        # ckpts += [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if "last" not in ckpt.stem]
+        # # import pdb; pdb.set_trace()
+        # if "val_acc" in str(ckpts[0]):
+        #     ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
+        # else:
+        #     ckpts.sort(
+        #         key=lambda x: float(x.stem.split("combined_acc=")[1]), reverse=True
+        #     )
 
-        ckpt_path = ckpts[-4]
+        # ckpt_path = ckpts[-4]
         # ckpt_path = Path(ckpt_dir, "last.ckpt")
-        print(f"Loading checkpoint from {str(ckpt_path)}.\n")
+        # print(f"Loading checkpoint from {str(ckpt_path)}.\n")
 
-        weights = torch.tensor([1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,4.0,4.0,1.0,1.0,1.0,1.0,1.0,1.0])
-        loss_fn = torch.nn.CrossEntropyLoss(reduction="mean",  weight=weights)
-        model = BC(
-            skill_name=self.skill_name,
-            joint_state_dims=14 * 3,
-            state_action_dims=17,
-            device=device,
-            use_wrist_img=True,
-            use_head_img=False,
-            use_joints=False,
-            loss_fn=loss_fn
-        )
 
-        state_dict = torch.load(ckpt_path, map_location=device)
-        modified_dict = {}
-        for key, value in state_dict.items():
-            key = key.replace("_orig_mod.", "")
-            modified_dict[key] = value
-        model.load_state_dict(modified_dict)
+        # state_dict = torch.load(ckpt_path, map_location=device)
+        # modified_dict = {}
+        # for key, value in state_dict.items():
+        #     key = key.replace("_orig_mod.", "")
+        #     modified_dict[key] = value
+        # model.load_state_dict(modified_dict)
+        
+        # ckpt_dir = Path("/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/ckpts")
+        # ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt")]
+        # ckpt_path = ckpts[-1]
+        ckpt_path = Path("/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/ckpts/epoch=60_val_acc=0.743.pt")
+        print(f"Loading {ckpt_path.stem}")
+        
+        model = BC()
+        model.load_state_dict(torch.load(ckpt_path, map_location=device))
         model.to(device)
         model.eval()
+
         return model
 
     def init_node(self):
@@ -457,6 +458,7 @@ class HalSkills(hm.HelloNode):
             point.positions = [new_value]
             trajectory_goal.trajectory.points = [point]
             trajectory_goal.trajectory.header.stamp = rospy.Time.now()
+            print(trajectory_goal)
             self.trajectory_client.send_goal(trajectory_goal)
 
     # -----------------pick_pantry() initial configs-----------------#
@@ -669,7 +671,7 @@ class HalSkills(hm.HelloNode):
                     img.unlink()
         print("start of reset")
         # get hal to starting position for pick
-        if "pick" in self.skill_name:
+        if "pick" in self.skill_name or "point" in self.skill_name:
             self.pick_pantry_initial_config(rate)
         elif self.skill_name == "place_table":
             self.place_table_initial_config(rate)
@@ -681,15 +683,13 @@ class HalSkills(hm.HelloNode):
         keypresses = []
         img_count = 0
         times = []
+
+        joint_pos = ["joint_lift", "wrist_extension", "joint_wrist_yaw"]
+
         while not rospy.is_shutdown():
-            print("not shutdown")
-            print("js ===== ", self.joint_states)
-            print("wrist image ===", self.wrist_image)
-            print("head image ===", self.head_image)
-            print(self.wrist_image.shape)
-            print(self.head_image.shape)
-            if self.joint_states is not None and self.wrist_image is not None and self.head_image is not None:
+            if self.joint_states is not None:
                 # check delta to determine skill termination
+
                 if "pick" in self.skill_name and self.check_pick_termination():
                     rospy.loginfo("\n\n***********Pick Completed***********\n\n")
                     self.action_status = SUCCESS
@@ -705,26 +705,39 @@ class HalSkills(hm.HelloNode):
                     print(self.joint_states_data)
                     continue
 
-                # self.joint_states_data = torch.cat((self.joint_states_data, args.user_coordinates))
+                                
+                print("-"*80)
+                print(f"Current goal position: {self.goal_tensor}")
+
+                # create current end-effector
+                joint_pos = self.joint_states.position
+                lift_idx, wrist_idx, yaw_idx = self.joint_states.name.index("joint_lift"), self.joint_states.name.index("wrist_extension"), self.joint_states.name.index("joint_wrist_yaw")
+                end_eff_tensor = torch.Tensor([joint_pos[lift_idx], joint_pos[wrist_idx], joint_pos[yaw_idx]])
+                print(f"Current EE pos: {end_eff_tensor}")
+                inp = torch.cat((end_eff_tensor, self.goal_tensor)).unsqueeze(0)
+
+                # self.joint_states_data = torch.cat((self.joint_states_data, args.user_coordinates
                 if self.model_type == "visuomotor_bc":
                     start = time.time()
                     # import pdb; pdb.set_trace()
-                    prediction = self.model(self.wrist_image, self.head_image, self.joint_states_data)
+                    # prediction = self.model(self.wrist_image, self.head_image, self.joint_states_data)
+                    prediction = self.model(inp)
                     # preddiction = self.model(self.joint_states_data)
                     times.append(time.time() - start)
-                elif self.train_type == "iql":
-                    observation = self.model.img_js_net(
-                        self.wrist_image, self.joint_states_data
-                    )
-                    prediction = self.model.actor.act(observation)
-                else:
-                    raise NotImplementedError
-                # keypressed_index = torch.argmax(prediction).item()
-                
+
+                # prediction = torch.nn.functional.softmax(prediction).flatten()
+                # dist = torch.distributions.Categorical(prediction)
+                # keypressed_index = dist.sample().item()
+                # keypressed = self.index_to_keypressed(keypressed_index)
+
                 prediction = torch.nn.functional.softmax(prediction).flatten()
-                dist = torch.distributions.Categorical(prediction)
-                keypressed_index = dist.sample().item()
+
+                sorted_preds = torch.argsort(prediction)
+
+                keypressed_index = torch.argmax(prediction).item()
                 keypressed = self.index_to_keypressed(keypressed_index)
+
+
 
                 if self.debug_mode:
                     img_count += 1
@@ -740,7 +753,10 @@ class HalSkills(hm.HelloNode):
                     print("NOOP")
                     continue
 
+
+
                 command = self.get_command(keypressed)
+
                 print(f"{rospy.Time().now()}, {keypressed_index=}, {command=}")
                 self.send_command(command)
             rate.sleep()
@@ -756,6 +772,7 @@ def get_args():
         "pick_whisk",
         "pick_whisk_pantry",
         "pick_salt",
+        "point_shoot",
     ]
     supported_models = ["visuomotor_bc", "irl"]
     supported_types = [
@@ -784,6 +801,7 @@ def get_args():
     parser.add_argument(
         "--train_type", type=str, choices=supported_types, default="bc_oracle"
     )
+    parser.add_argument("--goal_pos", type=str, required=True)
     return parser.parse_args(rospy.myargv()[1:])
 
 
@@ -792,7 +810,8 @@ if __name__ == "__main__":
     skill_name = args.skill_name
     model_type = args.model_type
     train_type = args.train_type
+    goal_pos = args.goal_pos.split(",")
 
-    node = HalSkills(skill_name, model_type, train_type)
+    node = HalSkills(skill_name, model_type, train_type, goal_pos)
     # node.start()
     node.main()
