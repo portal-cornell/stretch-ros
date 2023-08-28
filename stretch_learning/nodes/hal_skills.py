@@ -40,6 +40,42 @@ RUNNING = -1
 SUCCESS = 1
 NOT_STARTED = 2
 
+INDEX_TO_KEYPRESSED = {
+        # noop
+        0: "noop",
+        # arm up
+        1: "arm up",
+        # arm down
+        2: "arm down",
+        # arm out
+        3: "arm out",
+        # arm in
+        4: "arm in",
+        # base forward
+        5: "base forward",
+        # base back
+        6: "base back",
+        # base rotate left
+        7: "base rotate left",
+        # base rotate right
+        8: "base rotate right",
+        # gripper right
+        9: "gripper left",
+        # gripper left
+        10: "gripper right",
+        # gripper down
+        11: "gripper down",
+        # gripper up
+        12: "gripper up",
+        # gripper roll right
+        13: "gripper roll right",
+        # gripper roll left
+        14: "gripper roll left",
+        # gripper open
+        15: "gripper open",
+        # gripper close
+        16: "gripper close",
+}
 
 class HalSkills(hm.HelloNode):
     def __init__(self, skill_name, model_type, train_type, goal_pos):
@@ -715,29 +751,28 @@ class HalSkills(hm.HelloNode):
                 end_eff_tensor = torch.Tensor([joint_pos[lift_idx], joint_pos[wrist_idx], joint_pos[yaw_idx]])
                 print(f"Current EE pos: {end_eff_tensor}")
                 inp = torch.cat((end_eff_tensor, self.goal_tensor)).unsqueeze(0)
-
-                # self.joint_states_data = torch.cat((self.joint_states_data, args.user_coordinates
-                if self.model_type == "visuomotor_bc":
-                    start = time.time()
-                    # import pdb; pdb.set_trace()
-                    # prediction = self.model(self.wrist_image, self.head_image, self.joint_states_data)
-                    prediction = self.model(inp)
-                    # preddiction = self.model(self.joint_states_data)
-                    times.append(time.time() - start)
+                print(f"Current EE pos: {inp}")
+                # self.joint_states_data = torch.cat((self.joint_states_data, args.user_coordinate
+                start = time.time()
+                prediction = self.model(inp)
+                times.append(time.time() - start)
 
                 # prediction = torch.nn.functional.softmax(prediction).flatten()
                 # dist = torch.distributions.Categorical(prediction)
                 # keypressed_index = dist.sample().item()
                 # keypressed = self.index_to_keypressed(keypressed_index)
 
-                prediction = torch.nn.functional.softmax(prediction).flatten()
+                best3 = torch.argsort(prediction).flatten().flip(0)[:3]
+                probs = torch.nn.functional.softmax(prediction).flatten()
 
-                sorted_preds = torch.argsort(prediction)
+                # print(f"PREDICTION: {INDEX_TO_KEYPRESSED[keypressed_index]}")
+                print("Best 3")
+                for i in range(3):
+                    print(f"Prediction #{i+1}: {INDEX_TO_KEYPRESSED[best3[i].item()]}, {probs[best3[i]]}")
+                print("-"*50)
 
-                keypressed_index = torch.argmax(prediction).item()
+                keypressed_index = torch.argmax(probs).item()
                 keypressed = self.index_to_keypressed(keypressed_index)
-
-
 
                 if self.debug_mode:
                     img_count += 1
@@ -759,6 +794,7 @@ class HalSkills(hm.HelloNode):
 
                 print(f"{rospy.Time().now()}, {keypressed_index=}, {command=}")
                 self.send_command(command)
+                time.sleep(1)
             rate.sleep()
 
 
