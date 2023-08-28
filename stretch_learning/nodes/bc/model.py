@@ -43,7 +43,8 @@ class BC(nn.Module):
         lr=1e-3,
         max_epochs=1e5,
         img_comp_dims=32,
-        use_imgs=True,
+        use_wrist_img=True,
+        use_head_img=True,
         use_joints=True,
         use_end_eff=True,
         js_modifications="",
@@ -55,7 +56,8 @@ class BC(nn.Module):
         self.skill_name = skill_name
         self.device = device
 
-        self.use_imgs = use_imgs
+        self.use_wrist_img = use_wrist_img
+        self.use_head_img = use_head_img
         self.use_joints = use_joints
         self.use_end_eff = use_end_eff
         self.js_modifications = js_modifications
@@ -103,7 +105,7 @@ class BC(nn.Module):
             nn.Linear(self.fc_input_dims, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(p=0.5),
+            # nn.Dropout(p=0.5),
             nn.Linear(256, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
@@ -141,16 +143,15 @@ class BC(nn.Module):
             self.optimizer, max_epochs, 0
         )
 
-    def forward(self, image, js_data, image2=None):
-        batch_size = image.size(0)
-        img_t = self.img_encoder(image)
-        img2_t = self.img_encoder2(image2)
+    def forward(self, wrist_img, head_img, js_data):
+        batch_size = wrist_img.size(0)
+        img_t = self.img_encoder(wrist_img)
+        img_t2 = self.img_encoder2(head_img)
         device = img_t.device
-        if not self.use_imgs:
+        if not self.use_wrist_img:
             img_t = torch.zeros((batch_size, self.img_comp_dims))
-            img2_t = torch.zeros((batch_size, self.img_comp_dims))
-        elif image2 is None:
-            img2_t = torch.zeros((batch_size, self.img_comp_dims))
+        if not self.use_head_img:
+            img_t2 = self.img_encoder2(head_img)
         if self.use_joints:
             js_t = js_data
         else:
@@ -160,13 +161,13 @@ class BC(nn.Module):
         else:
             ee_t = torch.zeros((batch_size, self.end_eff_dim))
         img_t = img_t.to(device)
-        img2_t = img2_t.to(device)
+        img_t2 = img_t2.to(device)
         js_t = js_t.to(device)
         ee_t = ee_t.to(device)
 
         x = torch.cat((js_t, ee_t), dim=1)
         x = torch.cat((img_t, x), dim=1)
-        x = torch.cat((img2_t, x), dim=1)
+        x = torch.cat((img_t2, x), dim=1)
         x = self.fc(x)
         return x
 

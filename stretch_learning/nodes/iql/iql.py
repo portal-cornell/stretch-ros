@@ -7,38 +7,30 @@ import torch.nn.functional as F
 from torch.distributions import MultivariateNormal
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from .misc_utils import *
-from .img_js_net import *
-from .buffer import *
-
+from iql.misc_utils import *
+from iql.img_js_net import *
+from iql.buffer import *
 
 EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -5.0
 LOG_STD_MAX = 2.0
 
 
-def load_iql_trainer(device, img_comp_dim, n_hidden):
-    img_js_net = ImageJointStateNet(img_comp_dim=img_comp_dim)
-
-    # constants
-    state_dim = img_js_net.output_dim
-    action_dim = KEYBOARD_ACTIONS
-    max_action = 1
-
-    # hyperparameters (will be overwritten by ckpt)
-    discount = 0.99
-    tau = 0.005
-    beta = 3.0
-    iql_tau = 0.7
-    max_timesteps = 3000
-    finetune_resnet = False
-
+def load_iql_trainer(
+    device, iql_deterministic, state_dim, action_dim, max_action, n_hidden, img_js_net
+):
+    # q_network = TwinQ(state_dim, action_dim).to(config.device)
+    # v_network = ValueFunction(state_dim).to(config.device)
     q_network = TwinQ(state_dim, action_dim, n_hidden=n_hidden).to(device)
     v_network = ValueFunction(state_dim, n_hidden=n_hidden).to(device)
-    actor = GaussianPolicy(state_dim, action_dim, max_action).to(device)
+    if iql_deterministic:
+        actor = DeterministicPolicy(state_dim, action_dim, max_action).to(device)
+    else:
+        actor = GaussianPolicy(state_dim, action_dim, max_action).to(device)
     v_optimizer = torch.optim.Adam(v_network.parameters(), lr=3e-4)
     q_optimizer = torch.optim.Adam(q_network.parameters(), lr=3e-4)
     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=3e-4)
+    img_js_net.to(device)
 
     kwargs = {
         "action_dim": action_dim,
@@ -49,20 +41,18 @@ def load_iql_trainer(device, img_comp_dim, n_hidden):
         "q_optimizer": q_optimizer,
         "v_network": v_network,
         "v_optimizer": v_optimizer,
-        "discount": discount,
-        "tau": tau,
+        "discount": 0.99,
+        "tau": 0.3,
         "device": device,
-        "beta": beta,
-        "iql_tau": iql_tau,
-        "max_steps": max_timesteps,
-        "finetune_resnet": finetune_resnet,
+        "beta": 7,
+        "iql_tau": 0.0015,
+        "max_steps": 1e5,
+        "finetune_resnet": False,
+        "deterministic_actor": iql_deterministic,
     }
 
-    for network in [img_js_net, q_network, v_network, actor]:
-        network.eval()
-
     print("---------------------------------------")
-    print(f"Loading IQL")
+    print(f"Training IQL")
     print("---------------------------------------")
 
     return ImplicitQLearning(img_js_net, **kwargs)
@@ -89,7 +79,7 @@ class GaussianPolicy(nn.Module):
         super().__init__()
         self.net = MLP(
             [state_dim, *([hidden_dim] * n_hidden), act_dim],
-            output_activation_fn=nn.Tanh,
+            output_activation_fn=None,
         )
         # self.net = nn.Sequential(
         #     nn.Linear(state_dim, 256),
@@ -101,7 +91,6 @@ class GaussianPolicy(nn.Module):
         #     # nn.ReLU(inplace=True),
         #     nn.Linear(256, act_dim),
         # )
-        self.activation = nn.Tanh()
         self.log_std = nn.Parameter(torch.zeros(act_dim, dtype=torch.float32))
         self.max_action = max_action
 
@@ -150,7 +139,7 @@ class DeterministicPolicy(nn.Module):
         super().__init__()
         self.net = MLP(
             [state_dim, *([hidden_dim] * n_hidden), act_dim],
-            output_activation_fn=nn.Tanh,
+            output_activation_fn=None,
         )
         self.max_action = max_action
 
@@ -212,6 +201,7 @@ class ImplicitQLearning:
         tau: float = 0.005,
         device: str = "cpu",
         finetune_resnet: bool = True,
+        deterministic_actor: bool = False,
     ):
         self.img_js_net = img_js_net
         self.action_dim = action_dim
@@ -231,15 +221,12 @@ class ImplicitQLearning:
 
         self.total_it = 0
         self.device = device
+        self.deterministic_actor = deterministic_actor
         self.finetune_resnet = finetune_resnet
         self.accuracy = torchmetrics.Accuracy(
             task="multiclass", num_classes=action_dim, top_k=1
         ).to(device)
         self.CELoss = nn.CrossEntropyLoss()
-        # if not finetune_resnet:
-        #     print("==> Freezing Resnet")
-        #     for name, param in self.img_js_net.named_parameters():
-        #         param.requires_grad = False
 
     def _update_v(self, observations, actions, log_dict) -> torch.Tensor:
         # Update value function
@@ -251,9 +238,7 @@ class ImplicitQLearning:
         v_loss = asymmetric_l2_loss(adv, self.iql_tau)
         log_dict["value_loss"] = v_loss.item()
         log_dict["avg_v"] = torch.mean(v).item()
-        self.v_optimizer.zero_grad()
-        v_loss.backward()
-        self.v_optimizer.step()
+        v_loss.backward(retain_graph=True)
         return adv
 
     def _update_q(
@@ -270,9 +255,7 @@ class ImplicitQLearning:
         q_loss = sum(F.mse_loss(q, targets) for q in qs) / len(qs)
         log_dict["q_loss"] = q_loss.item()
         log_dict["avg_q"] = torch.mean(sum(q for q in qs)).item()
-        self.q_optimizer.zero_grad()
         q_loss.backward(retain_graph=True)
-        self.q_optimizer.step()
 
         # Update target Q network
         soft_update(self.q_target, self.qf, self.tau)
@@ -291,14 +274,14 @@ class ImplicitQLearning:
         policy_loss = torch.mean(exp_adv * bc_losses)
         log_dict["actor_loss"] = policy_loss.item()
         actions = torch.argmax(actions, dim=1).squeeze(0)
-        policy_accuracy = self.accuracy(policy_out.mean, actions)
-        log_dict["training_acc"] = policy_accuracy.item()
-        ce_loss = self.CELoss(policy_out.mean, actions)
-        log_dict["ce_loss"] = torch.mean(ce_loss).item()
-        self.actor_optimizer.zero_grad()
         policy_loss.backward()
-        self.actor_optimizer.step()
-        self.actor_lr_schedule.step()
+
+        if not self.deterministic_actor:
+            policy_out = policy_out.mean
+        policy_accuracy = self.accuracy(policy_out, actions)
+        ce_loss = self.CELoss(policy_out, actions)
+        log_dict["training_acc"] = policy_accuracy.item()
+        log_dict["ce_loss"] = torch.mean(ce_loss).item()
 
     def train(self, batch: TensorBatch) -> Dict[str, float]:
         self.total_it += 1
@@ -324,6 +307,10 @@ class ImplicitQLearning:
 
         with torch.no_grad():
             next_v = self.vf(next_observations)
+        self.v_optimizer.zero_grad()
+        self.q_optimizer.zero_grad()
+        self.actor_optimizer.zero_grad()
+
         # Update value function
         adv = self._update_v(observations, actions, log_dict)
         rewards = rewards.squeeze(dim=-1)
@@ -332,6 +319,10 @@ class ImplicitQLearning:
         self._update_q(next_v, observations, actions, rewards, dones, log_dict)
         # Update actor
         self._update_policy(adv, observations, actions, log_dict)
+        self.v_optimizer.step()
+        self.q_optimizer.step()
+        self.actor_optimizer.step()
+        self.actor_lr_schedule.step()
 
         return log_dict
 

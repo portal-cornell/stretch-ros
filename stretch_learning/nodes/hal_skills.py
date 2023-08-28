@@ -17,6 +17,7 @@ from custom_msg_python.msg import Keypressed
 import hello_helpers.hello_misc as hm
 
 import torch
+import torch.nn as nns
 import numpy as np
 from torchvision import transforms
 from cv_bridge import CvBridge, CvBridgeError
@@ -153,17 +154,23 @@ class HalSkills(hm.HelloNode):
                 key=lambda x: float(x.stem.split("combined_acc=")[1]), reverse=True
             )
 
-        ckpt_path = ckpts[0]
+        ckpt_path = ckpts[-4]
         # ckpt_path = Path(ckpt_dir, "last.ckpt")
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
 
+        weights = torch.tensor([1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,4.0,4.0,1.0,1.0,1.0,1.0,1.0,1.0])
+        loss_fn = torch.nn.CrossEntropyLoss(reduction="mean",  weight=weights)
         model = BC(
             skill_name=self.skill_name,
             joint_state_dims=14 * 3,
             state_action_dims=17,
             device=device,
-            use_joints=False
+            use_wrist_img=True,
+            use_head_img=False,
+            use_joints=False,
+            loss_fn=loss_fn
         )
+
         state_dict = torch.load(ckpt_path, map_location=device)
         modified_dict = {}
         for key, value in state_dict.items():
@@ -455,7 +462,7 @@ class HalSkills(hm.HelloNode):
     # -----------------pick_pantry() initial configs-----------------#
     def move_arm_pick_pantry(self):
         rospy.loginfo("Set arm")
-        self.pick_starting_height = 0.968
+        self.pick_starting_height = 0.998
         self.joint_lift_index = self.joint_states.name.index("joint_lift")
         pose = {
             "wrist_extension": 0.01,
@@ -510,7 +517,7 @@ class HalSkills(hm.HelloNode):
             "joint_wrist_pitch": 0.2,
             # "joint_wrist_yaw": -0.09,
         }
-        self.move_to_pose(pose)
+        # self.move_to_pose(pose)
         return True
 
     def pick_table_initial_config(self, rate):
@@ -698,9 +705,12 @@ class HalSkills(hm.HelloNode):
                     print(self.joint_states_data)
                     continue
 
+                # self.joint_states_data = torch.cat((self.joint_states_data, args.user_coordinates))
                 if self.model_type == "visuomotor_bc":
                     start = time.time()
-                    prediction = self.model(self.wrist_image, self.joint_states_data, image2=self.head_image)
+                    # import pdb; pdb.set_trace()
+                    prediction = self.model(self.wrist_image, self.head_image, self.joint_states_data)
+                    # preddiction = self.model(self.joint_states_data)
                     times.append(time.time() - start)
                 elif self.train_type == "iql":
                     observation = self.model.img_js_net(
@@ -710,6 +720,7 @@ class HalSkills(hm.HelloNode):
                 else:
                     raise NotImplementedError
                 # keypressed_index = torch.argmax(prediction).item()
+                
                 prediction = torch.nn.functional.softmax(prediction).flatten()
                 dist = torch.distributions.Categorical(prediction)
                 keypressed_index = dist.sample().item()
