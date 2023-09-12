@@ -992,7 +992,7 @@ class HalSkills(hm.HelloNode):
         predicted_kps = np.array(predicted_kps).flatten()
         # pts = np.flip(pts, axis=0)
         # pts = -pts
-        pts[:, 0] = -pts[:, 0]
+        # pts[:, 0] = pts[:, 0]
 
         return pts, predicted_kps 
 
@@ -1017,7 +1017,10 @@ class HalSkills(hm.HelloNode):
         # plotting decision boundary 
         print(f'x_lims: {x_lim}')
         print(f'y_lims: {y_lim}')
-        dec_bound_pts, dec_bound_kps = self.get_decision_boundary_points([x_min-0.45, -(y_max + 0.45)], [x_max+0.45, -(y_min - 0.45)], [0.005, 0.005])
+        mins = [-0.865, -0.420]
+        maxs = [0.735, 0.756]
+
+        dec_bound_pts, dec_bound_kps = self.get_decision_boundary_points(mins, maxs, [0.005, 0.005])
         print(f'decisionn_boundary x_lims: {np.min(dec_bound_pts[:, 0])}, {np.max(dec_bound_pts[:, 0])}')
         print(f'decisionn_boundary y_lims: {np.min(dec_bound_pts[:, 1])}, {np.max(dec_bound_pts[:, 1])}')
 
@@ -1026,14 +1029,15 @@ class HalSkills(hm.HelloNode):
         plt.legend(handles, [bound_mapping[i] for i in np.unique(dec_bound_kps)], title="Classes")
         # plt.legend(handles+handles2+handles3, [kp_mapping[i] for i in np.unique(labels)] + [sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] + [bound_mapping[i] for i in np.unique(dec_bound_kps)], title="Classes")
 
-        # scatter = plt.scatter(
-        #     -pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
-        # )
+        scatter = plt.scatter(
+            -pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
+        )
+        handles2, _ = scatter.legend_elements()
+        plt.legend(handles+handles2, [bound_mapping[i] for i in np.unique(dec_bound_kps)]+[kp_mapping[i] for i in np.unique(labels)], title="Classes")
 
         plt.plot(-goal[0], goal[1], marker="*", markersize=10, color="red")
         plt.plot(-pts[0, 0], pts[0, 1], marker="o", markersize=8, color="green")
-        # handles, _ = scatter.legend_elements()
-        # plt.legend(handles, [kp_mapping[i] for i in np.unique(labels)], title="Classes")
+        
 
         plt.xlabel("Relative x")
         plt.ylabel("Relative y")
@@ -1046,9 +1050,9 @@ class HalSkills(hm.HelloNode):
 
         # plotting sim 
 
-        # scatter = plt.scatter(-sim_x, sim_y, c=onpolicy_kp, cmap='Set1', s=2, alpha=1)
-        # handles2, _ = scatter.legend_elements() 
-        # plt.legend(handles+handles2, [kp_mapping[i] for i in np.unique(labels)] + [sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] , title="Classes")
+        scatter = plt.scatter(-sim_x, sim_y, c=onpolicy_kp, cmap='Set1', s=2, alpha=1)
+        handles3, _ = scatter.legend_elements() 
+        plt.legend(handles+handles2+handles3, [bound_mapping[i] for i in np.unique(dec_bound_kps)]+[kp_mapping[i] for i in np.unique(labels)]+[sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] , title="Classes")
 
 
         
