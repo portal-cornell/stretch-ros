@@ -9,6 +9,8 @@ import pandas as pd
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 
+gripper_len = 0.22
+base_gripper_yaw = -0.09
 
 class PSDataset(Dataset):
     def __init__(self, data_path):

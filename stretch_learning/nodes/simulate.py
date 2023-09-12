@@ -73,8 +73,14 @@ def simulate(inp, model, iterations):
         predicted_kp = torch.argmax(prediction).item()
         onpolicy_kp.append(predicted_kp)
         deltas = torch.Tensor(kp_delta_mapping[predicted_kp]).to(device)
-        inp[0, :2] += deltas
-        inp[0, 2:] -= deltas
+        # joint limit constraints 
+        if inp[0, 0] + deltas[0] < 0.457 and \
+        inp[0, 0] + deltas[0] > 0.0025 and \
+        inp[0, 1] + deltas[1] < 4.5859 and \
+        inp[0, 1] + deltas[1] > -1.3837:
+            inp[0, :2] += deltas
+            inp[0, 2:] -= deltas
+
         curr_x,curr_y = convert_js_xy(inp[0,0], inp[0,1]) 
 
         delta_list.append(torch.norm(inp[0, 2:]).item())
@@ -85,7 +91,7 @@ def simulate(inp, model, iterations):
     return inp_x, inp_y, min(delta_list), onpolicy_kp
 
 
-def run_simulate(start_ext, start_yaw, goal_ext, goal_yaw, ckpt_path, plot_save_path): 
+def run_simulate(start_ext, start_yaw, goal_ext, goal_yaw, ckpt_path, iterations): 
     matplotlib.use("Agg")
     # device = "cuda" if torch.cuda.is_available() else "cpu"
     device="cpu"
@@ -123,7 +129,7 @@ def run_simulate(start_ext, start_yaw, goal_ext, goal_yaw, ckpt_path, plot_save_
     goal_tensor = goal_tensor.to(device)
     inp = torch.cat((start_tensor, goal_tensor)).unsqueeze(0)
 
-    iterations = 200
+    # iterations = 100
 
     print(start_tensor)
     print([goal_ext, goal_yaw])
@@ -133,51 +139,51 @@ def run_simulate(start_ext, start_yaw, goal_ext, goal_yaw, ckpt_path, plot_save_
     kp_mapping = ["Arm out", "Arm in", "Gripper right", "Gripper left"]
     onpolicy_kp = np.array(onpolicy_kp,dtype = np.int32)
 
-    scatter = plt.scatter(np.array(inp_x[1:]), -np.array(inp_y[1:]), c=onpolicy_kp, cmap='viridis', s=5, alpha=1)
-    handles, _ = scatter.legend_elements()
-    filtered_kp_mapping = [kp_mapping[i] for i in np.unique(onpolicy_kp)]
+    # scatter = plt.scatter(np.array(inp_x[1:]), -np.array(inp_y[1:]), c=onpolicy_kp, cmap='viridis', s=5, alpha=1)
+    # handles, _ = scatter.legend_elements()
+    # filtered_kp_mapping = [kp_mapping[i] for i in np.unique(onpolicy_kp)]
 
     
-    plt.legend(handles, filtered_kp_mapping, title="Key Presses")
+    # plt.legend(handles, filtered_kp_mapping, title="Key Presses")
 
     # plt.plot(inp_x, inp_y, marker=".", markersize=1, color="blue", label="trajectory")
     start_x,start_y = convert_js_xy(start_ext.item(),start_yaw.item())
     goal_x,goal_y = convert_js_xy(goal_ext.item(),goal_yaw.item())
     rel_x = (goal_x-start_x)
     rel_y = (goal_y-start_y)
-    plt.plot(
-        [rel_x],
-        [-rel_y],
-        marker=".",
-        markersize=15,
-        color="green",
-        label="start",
-    )
-    plt.plot(
-        [0],
-        [0],
-        marker="*",
-        markersize=15,
-        color="red",
-        label="goal",
-    )
+    # plt.plot(
+    #     [rel_x],
+    #     [-rel_y],
+    #     marker=".",
+    #     markersize=15,
+    #     color="green",
+    #     label="start",
+    # )
+    # plt.plot(
+    #     [0],
+    #     [0],
+    #     marker="*",
+    #     markersize=15,
+    #     color="red",
+    #     label="goal",
+    # )
 
-    plt.xlim(-0.6,0.8)
-    plt.ylim(-0.4,0.8)
+    # plt.xlim(-0.6,0.8)
+    # plt.ylim(-0.4,0.8)
 
-    plt.xlabel("Reative X")
-    plt.ylabel("Relative Y")
+    # plt.xlabel("Reative X")
+    # plt.ylabel("Relative Y")
 
-    plt.title(f"Point and Shoot Simulator {epoch}")
-    plt.savefig(
-        f'{plot_save_path}/'
-        + str(delta_min)
-        + ".png"
-    )
+    # plt.title(f"Point and Shoot Simulator {epoch}")
+    # plt.savefig(
+    #     f'{plot_save_path}/'
+    #     + str(delta_min)
+    #     + ".png"
+    # )
     # plt.show()
-    plt.close()
+    # plt.close()
 
-    return np.array(inp_x[1:]), -np.array(inp_y[1:]), onpolicy_kp
+    return np.array(inp_x[1:]), np.array(inp_y[1:]), onpolicy_kp
 
 
 if __name__ == '__main__': 
@@ -187,6 +193,6 @@ if __name__ == '__main__':
     start_yaw = 3.52 
     goal_ext = 0.02
     goal_yaw = -0.74 
-    ckpt_path =  '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/20230903-034641_use_delta/epoch=900_mean_deltas=0.017.pt'
-    save_fig_path = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_6_graphs'
+    ckpt_path =  '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/20230905-180606_use_delta/epoch=700_mean_deltas=0.021.pt'
+    save_fig_path = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_11_graphs'
     run_simulate(start_ext, start_yaw, goal_ext, goal_yaw, ckpt_path, save_fig_path)
