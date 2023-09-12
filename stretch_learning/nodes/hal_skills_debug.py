@@ -1003,7 +1003,7 @@ class HalSkills(hm.HelloNode):
         import matplotlib
         matplotlib.use("Agg")
         sim_kp_mapping = ["Sim Arm out", "Sim Arm in", "Sim Gripper left", "Sim Gripper right"]
-        bound_mapping = ["Out", "In", "Left", "Right"]
+        bound_mapping = ["Train Out", "Train In", "Train Left", "Train Right"]
         pts = np.array(pts)
         labels = np.array(labels)
         print(f'shape: {pts.shape}')
@@ -1011,31 +1011,8 @@ class HalSkills(hm.HelloNode):
         x_min, x_max = pts[:, 0].min(), pts[:, 0].max()
         y_min, y_max = pts[:, 1].min(), pts[:, 1].max()
 
-        scatter = plt.scatter(
-            -pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
-        )
-
-        plt.plot(-goal[0], goal[1], marker="*", markersize=10, color="red")
-        plt.plot(-pts[0, 0], pts[0, 1], marker="o", markersize=8, color="green")
-        handles, _ = scatter.legend_elements()
-        plt.legend(handles, [kp_mapping[i] for i in np.unique(labels)], title="Classes")
-
-        plt.xlabel("Relative x")
-        plt.ylabel("Relative y")
         x_lim = [x_min - 0.5, x_max + 0.5]
         y_lim = [-(y_max + 0.5), -(y_min - 0.5)]
-        # plt.xlim(x_lim[0], x_lim[1])
-        # plt.ylim(y_lim[0], y_lim[1])
-        plt.xlim(-0.6,0.8)
-        plt.ylim(-0.4,0.8)
-        plt.title(title)
-
-        # plotting sim 
-
-        scatter = plt.scatter(-sim_x, sim_y, c=onpolicy_kp, cmap='Set1', s=2, alpha=1)
-        handles2, _ = scatter.legend_elements() 
-        plt.legend(handles+handles2, [kp_mapping[i] for i in np.unique(labels)] + [sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] , title="Classes")
-
 
         # plotting decision boundary 
         print(f'x_lims: {x_lim}')
@@ -1044,9 +1021,37 @@ class HalSkills(hm.HelloNode):
         print(f'decisionn_boundary x_lims: {np.min(dec_bound_pts[:, 0])}, {np.max(dec_bound_pts[:, 0])}')
         print(f'decisionn_boundary y_lims: {np.min(dec_bound_pts[:, 1])}, {np.max(dec_bound_pts[:, 1])}')
 
-        scatter = plt.scatter(dec_bound_pts[:, 0], dec_bound_pts[:, 1], c=dec_bound_kps, cmap="tab20b", s=5, alpha=0.1)
-        handles3, _ = scatter.legend_elements()
-        plt.legend(handles+handles2+handles3, [kp_mapping[i] for i in np.unique(labels)] + [sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] + [bound_mapping[i] for i in np.unique(dec_bound_kps)], title="Classes")
+        scatter = plt.scatter(dec_bound_pts[:, 0], dec_bound_pts[:, 1], c=dec_bound_kps, cmap="viridis", s=5, alpha=1)
+        handles, _ = scatter.legend_elements()
+        plt.legend(handles, [bound_mapping[i] for i in np.unique(dec_bound_kps)], title="Classes")
+        # plt.legend(handles+handles2+handles3, [kp_mapping[i] for i in np.unique(labels)] + [sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] + [bound_mapping[i] for i in np.unique(dec_bound_kps)], title="Classes")
+
+        # scatter = plt.scatter(
+        #     -pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
+        # )
+
+        plt.plot(-goal[0], goal[1], marker="*", markersize=10, color="red")
+        plt.plot(-pts[0, 0], pts[0, 1], marker="o", markersize=8, color="green")
+        # handles, _ = scatter.legend_elements()
+        # plt.legend(handles, [kp_mapping[i] for i in np.unique(labels)], title="Classes")
+
+        plt.xlabel("Relative x")
+        plt.ylabel("Relative y")
+        
+        # plt.xlim(x_lim[0], x_lim[1])
+        # plt.ylim(y_lim[0], y_lim[1])
+        plt.xlim(-0.6,0.8)
+        plt.ylim(-0.6,0.8)
+        plt.title(title)
+
+        # plotting sim 
+
+        # scatter = plt.scatter(-sim_x, sim_y, c=onpolicy_kp, cmap='Set1', s=2, alpha=1)
+        # handles2, _ = scatter.legend_elements() 
+        # plt.legend(handles+handles2, [kp_mapping[i] for i in np.unique(labels)] + [sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] , title="Classes")
+
+
+        
 
         save_dir = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_11_graphs'
         save_path = Path(save_dir, f"{title.replace(' ', '_')}.png")
