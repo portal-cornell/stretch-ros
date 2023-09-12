@@ -36,6 +36,9 @@ from iql.iql import load_iql_trainer
 
 from stretch_learning.srv import Pick, PickResponse
 
+# simulation import 
+import simulate 
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 RUNNING = -1
@@ -152,8 +155,8 @@ class HalSkills(hm.HelloNode):
         elif self.model_type == "irl" and self.train_type == "iql":
             self.model = self.load_iql_model(ckpt_dir)
 
-        goal_pos = list(map(float, goal_pos))
-        self.goal_tensor = torch.Tensor(goal_pos).to(device)
+        self.goal_pos = list(map(float, goal_pos))
+        self.goal_tensor = torch.Tensor(self.goal_pos).to(device)
 
         self.init_node()
 
@@ -183,6 +186,7 @@ class HalSkills(hm.HelloNode):
         ]
         ckpts.sort(key=lambda x: float(x.stem.split("_", 3)[2]))
         ckpt_path = ckpts[0]
+        ckpt_path = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_salt/visuomotor_bc/bc_oracle/epoch=3_combined_acc=0.747.pt'
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
         model.img_js_net.eval()
@@ -216,11 +220,11 @@ class HalSkills(hm.HelloNode):
         # ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt")]
         # ckpt_path = ckpts[-1]
         ckpt_path = Path(
-            "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/20230901-065332_use_delta/epoch=610_mean_deltas=0.131.pt"
+            "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_salt/visuomotor_bc/bc_oracle/epoch=3_combined_acc=0.747.pt"
         )
         print(f"Loading {ckpt_path.stem}")
 
-        model = BC(self.is_2d, self.use_delta)
+        model = BC("pick_salt",4,4)
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
         model.to(device)
         model.eval()
@@ -687,8 +691,8 @@ class HalSkills(hm.HelloNode):
 
         return PickResponse(self.action_status)
 
-    def end_eff_to_xy(self, deltas):
-        extension, yaw = deltas
+    def end_eff_to_xy(self, extension, yaw):
+        # extension, yaw = deltas
         yaw_delta = -(yaw - self.base_gripper_yaw)  # going right is more negative
         x = self.gripper_len * np.sin(yaw_delta)
         y = self.gripper_len * np.cos(yaw_delta) + extension
@@ -752,14 +756,14 @@ class HalSkills(hm.HelloNode):
             3: 10,
         }
 
+        initial_pos = None 
         onpolicy_pos = []
         onpolicy_kp = []
         goal = (0.0, 0.0)
         # while not rospy.is_shutdown():
-        for _ in range(30):
-            if self.joint_states is not None:
+        for _ in range(200):
+            if self.joint_states is not None and self.wrist_image is not None and self.head_image is not None:
                 # check delta to determine skill termination
-
                 if "pick" in self.skill_name and self.check_pick_termination():
                     rospy.loginfo("\n\n***********Pick Completed***********\n\n")
                     self.action_status = SUCCESS
@@ -785,22 +789,36 @@ class HalSkills(hm.HelloNode):
                     self.joint_states.name.index("wrist_extension"),
                     self.joint_states.name.index("joint_wrist_yaw"),
                 )
-                end_eff_tensor = torch.Tensor(
-                    [joint_pos[wrist_idx], joint_pos[yaw_idx]]
-                )
-                print(f"Current EE pos: {end_eff_tensor}")
 
+                end_eff_tensor = torch.Tensor(
+                    self.end_eff_to_xy(
+                        joint_pos[wrist_idx], joint_pos[yaw_idx]
+                    )
+                )
+                
+                goal_pos_tensor = torch.Tensor(self.end_eff_to_xy(*self.goal_pos))
+                
+                print(f'goal tensor:  {goal_pos_tensor}')
+                print(f"Current EE pos: {end_eff_tensor}")
+                if initial_pos is None: 
+                    initial_pos = [joint_pos[wrist_idx], joint_pos[yaw_idx]]
+
+                if torch.norm(goal_pos_tensor - end_eff_tensor) < 0.018:
+                    print("Got to goal!!")
+                    break
                 if self.is_2d:
                     inp = self.goal_tensor - end_eff_tensor
                 elif self.use_delta:
-                    inp = torch.cat((end_eff_tensor, self.goal_tensor - end_eff_tensor))
+                    inp = torch.cat((end_eff_tensor, goal_pos_tensor - end_eff_tensor))
                 else:
                     inp = torch.cat((end_eff_tensor, self.goal_tensor))
                 inp = inp.unsqueeze(0)
                 print(f"Current EE pos: {inp}")
                 # self.joint_states_data = torch.cat((self.joint_states_data, args.user_coordinate
                 start = time.time()
-                prediction = self.model(inp)
+                prediction = self.model(self.wrist_image, self.head_image, self.joint_states_data)
+                print(f"{prediction=}")
+                
                 times.append(time.time() - start)
 
                 # prediction = torch.nn.functional.softmax(prediction).flatten()
@@ -821,9 +839,11 @@ class HalSkills(hm.HelloNode):
                 keypressed = kp_reduced_mapping[keypressed_index]
                 keypressed = self.index_to_keypressed(keypressed)
 
-                _pos = self.end_eff_to_xy(
-                    (self.goal_tensor - end_eff_tensor).cpu().numpy()
-                )
+                # _pos = self.end_eff_to_xy(
+                #     (self.goal_tensor - end_eff_tensor).cpu().numpy()
+                # )
+                _pos = (goal_pos_tensor - end_eff_tensor).cpu().numpy()
+                print(f'pos: {_pos}')
                 onpolicy_pos.append(_pos)
                 onpolicy_kp.append(keypressed_index)
 
@@ -845,7 +865,7 @@ class HalSkills(hm.HelloNode):
 
                 print(f"{rospy.Time().now()}, {keypressed_index=}, {command=}")
                 self.send_command(command)
-                time.sleep(1)
+                # time.sleep(1)
             rate.sleep()
         timestr = time.strftime("%Y%m%d-%H%M%S")
         if self.is_2d:
@@ -854,43 +874,194 @@ class HalSkills(hm.HelloNode):
             title = f"{timestr}_use_delta"
         else:
             title = f"{timestr}_no_delta"
-        self.decision_boundary(
-            onpolicy_pos, onpolicy_kp, goal, title=title, save_dir="plots"
-        )
+
+        start_ext = initial_pos[0]
+        start_yaw = initial_pos[1]
+        goal_ext = self.goal_pos[0]
+        goal_yaw = self.goal_pos[1]
+        ckpt_path =  '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/20230903-034641_use_delta/epoch=900_mean_deltas=0.017.pt'
+        save_fig_path = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_6_graphs'
+        sim_x, sim_y, sim_onpolicy_kp = simulate.run_simulate(start_ext, start_yaw, goal_ext, goal_yaw, ckpt_path, save_fig_path)
+
+        self.overlay_plot(sim_x, sim_y, sim_onpolicy_kp, onpolicy_pos, onpolicy_kp, goal, title, save_dir='plots')
+        # self.overlay_plot(self, sim_x, sim_y, onpolicy_kp, pts, labels, goal, title, file=None, save_dir='temp')
+        # self.decision_boundary(
+        #     onpolicy_pos, onpolicy_kp, goal, title=title, save_dir="plots"
+        # )
+
+
+
+    # def decision_boundary(self, pts, labels, goal, title, file=None, save_dir="temp"):
+    #     pts = np.array(pts)
+    #     print(f'pts: {pts}')
+    #     labels = np.array(labels)
+    #     x_min, x_max = pts[:, 0].min(), pts[:, 0].max()
+    #     y_min, y_max = pts[:, 1].min(), pts[:, 1].max()
+    
+    #     print(f'x_min: {x_min}')
+    #     print(f'x_max: {x_max}')
+        
+
+    #     scatter = plt.scatter(
+    #         pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
+    #     )
+    #     plt.plot(goal[0], goal[1], marker="*", markersize=15, color="red")
+    #     fig_handle = plt.figure()
+    #     handles, _ = scatter.legend_elements()
+    #     filtered_kp_mapping = [kp_mapping[i] for i in np.unique(labels)]
+    #     plt.legend(handles, filtered_kp_mapping, title="Classes")
+    #     plt.xlabel("Relative x")
+    #     plt.ylabel("Relative y")
+    #     # plt.xlim(x_min - 0.5, x_max + 0.5)
+    #     # plt.ylim(y_min - 0.5, y_max + 0.5)
+    #     plt.title(title)
+    #     print(f"Saving as decision_boundary{'_' + file if file else ''}.png")
+
+    #     save_dir = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_5_graphs'
+    #     save_path = Path(save_dir, f"{title.replace(' ', '_')}.png")
+    #     save_path.parent.mkdir(exist_ok=True)
+    #     plt.savefig(
+    #         # f'decision_boundary{"_" + file if file else ""}.png',
+    #         save_path,
+    #         dpi=300,
+    #         bbox_inches="tight",
+    #     )
+
+    #     pl.dump(fig_handle, file(f"{title}.pickle", "wb"))
+    #     plt.close()
+# import numpy as np
+# import matplotlib.pyplot as plt
+# from pathlib import Path
+# import pickle as pl
 
     def decision_boundary(self, pts, labels, goal, title, file=None, save_dir="temp"):
+        import matplotlib
+        matplotlib.use("Agg")
         pts = np.array(pts)
         labels = np.array(labels)
+
+        print(f'shape: {pts.shape}')
+
         x_min, x_max = pts[:, 0].min(), pts[:, 0].max()
         y_min, y_max = pts[:, 1].min(), pts[:, 1].max()
-        ax = plt.gca()
-        ax.set_xlim([x_min - 0.5, x_max + 0.5])
-        ax.set_ylim([y_min - 0.1, y_max + 0.1])
 
         scatter = plt.scatter(
-            pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
+            pts[:, 0], -pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
         )
-        plt.plot(goal[0], goal[1], marker="*", markersize=15, color="red")
+        plt.plot(goal[0], -goal[1], marker="*", markersize=10, color="red")
+        plt.plot(pts[0, 0], -pts[0, 1], marker="o", markersize=8, color="green")
         handles, _ = scatter.legend_elements()
-        filtered_kp_mapping = [kp_mapping[i] for i in np.unique(labels)]
-        plt.legend(handles, filtered_kp_mapping, title="Classes")
-        plt.xlabel("Wrist Yaw")
-        plt.ylabel("Wrist Extension")
-        plt.title(title)
-        print(f"Saving as decision_boundary{'_' + file if file else ''}.png")
+        plt.legend(handles, [kp_mapping[i] for i in np.unique(labels)], title="Classes")
 
+        plt.xlabel("Relative x")
+        plt.ylabel("Relative y")
+        plt.xlim(x_min - 0.5, x_max + 0.5)
+        plt.ylim(-(y_max + 0.5), -(y_min - 0.5))
+        # plt.xlim(-0.6,0.8)
+        # plt.ylim(-0.4,0.8)
+        plt.title(title)
+
+        save_dir = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_5_graphs'
         save_path = Path(save_dir, f"{title.replace(' ', '_')}.png")
         save_path.parent.mkdir(exist_ok=True)
         plt.savefig(
-            # f'decision_boundary{"_" + file if file else ""}.png',
             save_path,
             dpi=300,
             bbox_inches="tight",
         )
 
-        fig_handle = plt.figure()
-        pl.dump(fig_handle, file(f"{title}.pickle", "wb"))
+        with open(f"{title}.pickle", "wb") as pickle_file:
+            pl.dump(fig_handle, pickle_file)
+
         plt.close()
+
+    def get_decision_boundary_points(self, mins, maxs, res): 
+        ranges = [np.arange(mins[i], maxs[i] + res[i], res[i]) for i in range(len(mins))]
+        grids = np.meshgrid(*ranges, indexing="ij")
+        pts = np.stack(grids, axis=-1).reshape(-1, len(mins))
+
+        predicted_kps = []
+        pts = np.stack(grids, axis=-1).reshape(-1, len(mins))
+        for p in pts:
+            dx, dy = self.goal_pos[0] - p[0], self.goal_pos[1] - p[1]
+            inp = np.append(p, [dx, dy])
+            inp = torch.from_numpy(inp).float().unsqueeze(0).to(device)
+            predicted_action = self.model(inp)
+            predicted_kp = torch.argmax(predicted_action).item()
+            predicted_kps.append([predicted_kp])
+        predicted_kps = np.array(predicted_kps).flatten()
+        # pts = np.flip(pts, axis=0)
+        # pts = -pts
+        # pts[:, 0] = -pts[:, 0]
+
+        return pts, predicted_kps 
+
+
+
+        
+    def overlay_plot(self, sim_x, sim_y, onpolicy_kp, pts, labels, goal, title, file=None, save_dir='temp'): 
+        import matplotlib
+        matplotlib.use("Agg")
+        sim_kp_mapping = ["Sim Arm out", "Sim Arm in", "Sim Gripper left", "Sim Gripper right"]
+
+        pts = np.array(pts)
+        labels = np.array(labels)
+        print(f'shape: {pts.shape}')
+
+        x_min, x_max = pts[:, 0].min(), pts[:, 0].max()
+        y_min, y_max = pts[:, 1].min(), pts[:, 1].max()
+
+        scatter = plt.scatter(
+            pts[:, 0], -pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
+        )
+        plt.plot(goal[0], -goal[1], marker="*", markersize=10, color="red")
+        plt.plot(pts[0, 0], -pts[0, 1], marker="o", markersize=8, color="green")
+        handles, _ = scatter.legend_elements()
+        plt.legend(handles, [kp_mapping[i] for i in np.unique(labels)], title="Classes")
+
+        plt.xlabel("Relative x")
+        plt.ylabel("Relative y")
+        x_lim = [x_min - 0.5, x_max + 0.5]
+        y_lim = [-(y_max + 0.5), -(y_min - 0.5)]
+        plt.xlim(x_lim[0], x_lim[1])
+        plt.ylim(y_lim[0], y_lim[1])
+        # plt.xlim(-0.6,0.8)
+        # plt.ylim(-0.4,0.8)
+        plt.title(title)
+
+        # plotting sim 
+
+        scatter = plt.scatter(sim_x, sim_y, c=onpolicy_kp, cmap='viridis', s=2, alpha=0.3)
+        handles2, _ = scatter.legend_elements() 
+        plt.legend(handles+handles2, [kp_mapping[i] for i in np.unique(labels)] + [sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] , title="Classes")
+
+
+        # plotting decision boundary 
+        print(f'x_lims: {x_lim}')
+        print(f'y_lims: {y_lim}')
+        dec_bound_pts, dec_bound_kps = self.get_decision_boundary_points([x_min-0.45, -(y_max + 0.45)], [x_max+0.45, -(y_min - 0.45)], [0.005, 0.005])
+        print(f'decisionn_boundary x_lims: {np.min(dec_bound_pts[:, 0])}, {np.max(dec_bound_pts[:, 0])}')
+        print(f'decisionn_boundary y_lims: {np.min(dec_bound_pts[:, 1])}, {np.max(dec_bound_pts[:, 1])}')
+
+        scatter = plt.scatter(dec_bound_pts[:, 0], dec_bound_pts[:, 1], c=dec_bound_kps, cmap="viridis", s=5, alpha=0.01)
+        
+        save_dir = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_6_graphs'
+        save_path = Path(save_dir, f"{title.replace(' ', '_')}.png")
+        save_path.parent.mkdir(exist_ok=True)
+        plt.savefig(
+            save_path,
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+        with open(f"{title}.pickle", "wb") as pickle_file:
+            pl.dump(fig_handle, pickle_file)
+
+        plt.close()
+
+# Usage example:
+# decision_boundary(pts, labels, goal, "Decision Boundary", file=None, save_dir="temp")
+
 
 
 def get_args():
@@ -924,17 +1095,17 @@ def get_args():
 
     parser = argparse.ArgumentParser(description="main_slighting")
     parser.add_argument(
-        "--skill_name", type=str, choices=supported_skills, default="pick_pantry"
+        "--skill_name", type=str, choices=supported_skills, default="pick_salt"
     )
-    parser.add_argument("--input_dim", type=str, choices=["4d", "2d"], required=True)
-    parser.add_argument("--use_delta", action="store_true", default=False)
+    parser.add_argument("--input_dim", type=str, choices=["4d", "2d"], required=False, default="4d")
+    parser.add_argument("--use_delta", action="store_true", default=True)
     parser.add_argument(
         "--model_type", type=str, choices=supported_models, default="visuomotor_bc"
     )
     parser.add_argument(
         "--train_type", type=str, choices=supported_types, default="bc_oracle"
     )
-    parser.add_argument("--goal_pos", type=str, required=True)
+    parser.add_argument("--goal_pos", type=str, required=False, default="0,0")
     return parser.parse_args(rospy.myargv()[1:])
 
 

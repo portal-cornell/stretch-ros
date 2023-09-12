@@ -19,6 +19,8 @@ images/
 # Checkpoints
 checkpoints/
 *ckpts/
+*.pickle
+*.png
 
 # Distribution / packaging
 .Python
