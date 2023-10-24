@@ -26,7 +26,7 @@ from cv_bridge import CvBridge, CvBridgeError
 
 # BC imports
 from r3m import load_r3m
-from bc.model import BC
+from ablate_bc import BC
 
 # from bc.model_bc_trained import BC as BC_Trained
 
@@ -39,6 +39,8 @@ from stretch_learning.srv import Pick, PickResponse
 # simulation import 
 import simulate 
 
+gripper_len = 0.22
+base_gripper_yaw = -0.09
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 RUNNING = -1
@@ -82,7 +84,7 @@ INDEX_TO_KEYPRESSED = {
     16: "gripper close",
 }
 
-kp_mapping = ["Arm out", "Arm in", "Gripper left", "Gripper right"]
+kp_mapping = ["Arm out", "Arm in", "Gripper right", "Gripper left"]
 
 
 class HalSkills(hm.HelloNode):
@@ -186,7 +188,7 @@ class HalSkills(hm.HelloNode):
         ]
         ckpts.sort(key=lambda x: float(x.stem.split("_", 3)[2]))
         ckpt_path = ckpts[0]
-        ckpt_path = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_salt/visuomotor_bc/bc_oracle/epoch=3_combined_acc=0.747.pt'
+        ckpt_path = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/20230918-145332_use_delta/epoch=400_success=0.250.pt'
         print(f"Loading checkpoint from {str(ckpt_path)}.\n")
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
         model.img_js_net.eval()
@@ -220,7 +222,7 @@ class HalSkills(hm.HelloNode):
         # ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt")]
         # ckpt_path = ckpts[-1]
         ckpt_path = Path(
-            "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/20230905-180606_use_delta/epoch=700_mean_deltas=0.021.pt"
+            "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/20230918-145332_use_delta/epoch=400_success=0.250.pt"
         )
         print(f"Loading {ckpt_path.stem}")
 
@@ -761,7 +763,7 @@ class HalSkills(hm.HelloNode):
         onpolicy_kp = []
         goal = (0.0, 0.0)
         # while not rospy.is_shutdown():
-        for _ in range(200):
+        for _ in range(150):
             if self.joint_states is not None and self.wrist_image is not None and self.head_image is not None:
                 # check delta to determine skill termination
                 if "pick" in self.skill_name and self.check_pick_termination():
@@ -806,9 +808,9 @@ class HalSkills(hm.HelloNode):
                 if torch.norm(goal_pos_tensor - end_eff_tensor) < 0.018:
                     print("Got to goal!!")
                     break
-                if self.is_2d:
-                    inp = self.goal_tensor - end_eff_tensor
-                elif self.use_delta:
+                # if self.is_2d:
+                #     inp = self.goal_tensor - end_eff_tensor
+                if self.use_delta:
                     inp = torch.cat((end_eff_tensor, goal_pos_tensor - end_eff_tensor))
                 else:
                     inp = torch.cat((end_eff_tensor, self.goal_tensor))
@@ -879,9 +881,36 @@ class HalSkills(hm.HelloNode):
         start_yaw = initial_pos[1]
         goal_ext = self.goal_pos[0]
         goal_yaw = self.goal_pos[1]
-        ckpt_path =  '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/20230905-180606_use_delta/epoch=700_mean_deltas=0.021.pt'
-        save_fig_path = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_11_graphs'
-        sim_x, sim_y, sim_onpolicy_kp = simulate.run_simulate(start_ext, start_yaw, goal_ext, goal_yaw, ckpt_path, iterations=200)
+        ckpt_path =  '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/20230918-145332_use_delta/epoch=400_success=0.250.pt'
+        save_fig_path = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_18_graphs'
+        # (inp, goal, model, iterations, is_2d, use_delta, is_xy)
+
+        ckpt_path = 'epoch=400_success=0.250.pt'
+        # for ckpt_path in os.listdir(base_folder):
+        epoch = ckpt_path.split("_")[0]
+        # ckpt_path = r"C:\Users\adipk\Documents\HAL\hal-skills-repo\point_and_shoot_debug\ckpts\20230901-065332_use_delta\epoch=100_mean_deltas=0.111.pt"
+        # model = load_bc_model(Path(base_folder, ckpt_path), device)
+        # model.eval()
+        # pred = model(torch.tensor([-0.25, -0.15]))
+        # print(pred)
+        # print(torch.argmax(pred))
+        # sys.exit()
+        success = 0
+        iteration_list = []
+        is_2d = False
+        use_delta = True
+        is_xy = False
+
+        max_iterations = 350
+
+        goal = [goal_ext, goal_yaw]
+
+        if use_delta:
+            inp = torch.tensor([[start_ext, start_yaw, goal_ext - start_ext, goal_yaw - start_yaw]]).to(device)
+        else:
+            inp = torch.tensor([[start_ext, start_yaw, goal_ext, goal_yaw]]).to(device)
+
+        sim_x, sim_y, min_delta_list, time_steps, sim_onpolicy_kp = simulate.run_simulate(inp, goal, self.model, max_iterations, is_2d, use_delta, is_xy)
 
         self.overlay_plot(sim_x, sim_y, sim_onpolicy_kp, onpolicy_pos, onpolicy_kp, goal, title, save_dir='plots')
         # self.overlay_plot(self, sim_x, sim_y, onpolicy_kp, pts, labels, goal, title, file=None, save_dir='temp')
@@ -961,7 +990,7 @@ class HalSkills(hm.HelloNode):
         # plt.ylim(-0.4,0.8)
         plt.title(title)
 
-        save_dir = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_11_graphs'
+        save_dir = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_12_graphs'
         save_path = Path(save_dir, f"{title.replace(' ', '_')}.png")
         save_path.parent.mkdir(exist_ok=True)
         plt.savefig(
@@ -1002,8 +1031,8 @@ class HalSkills(hm.HelloNode):
     def overlay_plot(self, sim_x, sim_y, onpolicy_kp, pts, labels, goal, title, file=None, save_dir='temp'): 
         import matplotlib
         matplotlib.use("Agg")
-        sim_kp_mapping = ["Sim Arm out", "Sim Arm in", "Sim Gripper left", "Sim Gripper right"]
-        bound_mapping = ["Train Out", "Train In", "Train Left", "Train Right"]
+        sim_kp_mapping = ["Sim Arm out", "Sim Arm in", "Sim Gripper right", "Sim Gripper left"]
+        bound_mapping = ["Train Out", "Train In", "Train Right", "Train Left"]
         pts = np.array(pts)
         labels = np.array(labels)
         print(f'shape: {pts.shape}')
@@ -1024,19 +1053,20 @@ class HalSkills(hm.HelloNode):
         print(f'decisionn_boundary x_lims: {np.min(dec_bound_pts[:, 0])}, {np.max(dec_bound_pts[:, 0])}')
         print(f'decisionn_boundary y_lims: {np.min(dec_bound_pts[:, 1])}, {np.max(dec_bound_pts[:, 1])}')
 
-        scatter = plt.scatter(dec_bound_pts[:, 0], dec_bound_pts[:, 1], c=dec_bound_kps, cmap="viridis", s=5, alpha=1)
-        handles, _ = scatter.legend_elements()
-        plt.legend(handles, [bound_mapping[i] for i in np.unique(dec_bound_kps)], title="Classes")
+        # scatter = plt.scatter(-dec_bound_pts[:, 0], dec_bound_pts[:, 1], c=dec_bound_kps, cmap="viridis", s=5, alpha=1)
+        # handles, _ = scatter.legend_elements()
+        # plt.legend(handles, [bound_mapping[i] for i in np.unique(dec_bound_kps)], title="Classes")
         # plt.legend(handles+handles2+handles3, [kp_mapping[i] for i in np.unique(labels)] + [sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] + [bound_mapping[i] for i in np.unique(dec_bound_kps)], title="Classes")
 
         scatter = plt.scatter(
-            -pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
+            pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
         )
         handles2, _ = scatter.legend_elements()
-        plt.legend(handles+handles2, [bound_mapping[i] for i in np.unique(dec_bound_kps)]+[kp_mapping[i] for i in np.unique(labels)], title="Classes")
+        # plt.legend(handles+handles2, [bound_mapping[i] for i in np.unique(dec_bound_kps)]+[kp_mapping[i] for i in np.unique(labels)], title="Classes")
+        plt.legend(handles2, [kp_mapping[i] for i in np.unique(labels)], title="Classes")
 
-        plt.plot(-goal[0], goal[1], marker="*", markersize=10, color="red")
-        plt.plot(-pts[0, 0], pts[0, 1], marker="o", markersize=8, color="green")
+        plt.plot(goal[0], goal[1], marker="*", markersize=10, color="red")
+        plt.plot(pts[0, 0], pts[0, 1], marker="o", markersize=8, color="green")
         
 
         plt.xlabel("Relative x")
@@ -1044,20 +1074,21 @@ class HalSkills(hm.HelloNode):
         
         # plt.xlim(x_lim[0], x_lim[1])
         # plt.ylim(y_lim[0], y_lim[1])
-        plt.xlim(-0.6,0.8)
-        plt.ylim(-0.6,0.8)
+        plt.xlim(-0.8,0.8)
+        plt.ylim(-0.8,0.8)
         plt.title(title)
 
         # plotting sim 
 
-        scatter = plt.scatter(-sim_x, sim_y, c=onpolicy_kp, cmap='Set1', s=2, alpha=1)
+        scatter = plt.scatter(      sim_x, sim_y, c=onpolicy_kp, cmap='Set1', s=2, alpha=1)
         handles3, _ = scatter.legend_elements() 
-        plt.legend(handles+handles2+handles3, [bound_mapping[i] for i in np.unique(dec_bound_kps)]+[kp_mapping[i] for i in np.unique(labels)]+[sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] , title="Classes")
+        # plt.legend(handles+handles2+handles3, [bound_mapping[i] for i in np.unique(dec_bound_kps)]+[kp_mapping[i] for i in np.unique(labels)]+[sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] , title="Classes")
+        plt.legend(handles2+handles3, [kp_mapping[i] for i in np.unique(labels)]+[sim_kp_mapping[i] for i in np.unique(onpolicy_kp)] , title="Classes")
 
 
         
 
-        save_dir = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_11_graphs'
+        save_dir = '/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_12_graphs'
         save_path = Path(save_dir, f"{title.replace(' ', '_')}.png")
         save_path.parent.mkdir(exist_ok=True)
         plt.savefig(

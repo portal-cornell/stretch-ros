@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import pdb
+
 import time
 import cv2
 import csv
@@ -11,6 +11,7 @@ import actionlib
 from pathlib import Path
 from sensor_msgs.msg import JointState
 from sensor_msgs.msg import Image
+from nav_msgs.msg import Odometry
 from trajectory_msgs.msg import JointTrajectoryPoint
 from control_msgs.msg import FollowJointTrajectoryGoal, FollowJointTrajectoryAction
 from custom_msg_python.msg import Keypressed
@@ -29,10 +30,12 @@ from cv_bridge import CvBridge, CvBridgeError
 import ppo_utils
 import open_clip
 import copy
-import json
 from ppo import MLP
-import requests
-import io
+import sys
+
+import hal_controller_full_train
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3 import PPO
 
 
 def load_ppo_model(pth_path):
@@ -41,14 +44,14 @@ def load_ppo_model(pth_path):
     return model
 
 
-from transformers import OwlViTProcessor, Owlv2Processor
+from transformers import OwlViTProcessor
 
-processor = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
+processor = OwlViTProcessor.from_pretrained("google/owlvit-base-patch32")
 tokenizer = open_clip.get_tokenizer("EVA02-B-16")
 
 # BC imports
 from r3m import load_r3m
-from bc.owlvit_model import BC
+from bc.owlvit_model_v3 import BC
 
 # from bc.model_bc_trained import BC as BC_Trained
 
@@ -60,7 +63,6 @@ from stretch_learning.srv import Pick, PickResponse
 
 # simulation import
 import simulate
-import base64
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -105,7 +107,18 @@ INDEX_TO_KEYPRESSED = {
     16: "gripper close",
 }
 
-kp_mapping = ["Arm out", "Arm in", "Gripper left", "Gripper right"]
+kp_mapping = [
+    "Arm out",
+    "Arm in",
+    "Gripper right",
+    "Gripper left",
+    "Lift Up",
+    "Lift Down",
+    "Base Left",
+    "Base Right",
+    "Base Rotate Left",
+    "Base Rotate Right",
+]
 
 joint_labels_for_img = [
     "gripper_aperture",
@@ -123,9 +136,6 @@ joint_labels_for_img = [
     "joint_wrist_yaw",
     "wrist_extension",
 ]
-
-
-url = "http://192.168.0.243:8000/predict"
 
 
 class HalSkills(hm.HelloNode):
@@ -146,11 +156,13 @@ class HalSkills(hm.HelloNode):
         self.small_rad = self.rad_per_deg * self.small_deg
         self.small_translate = 0.005  # 0.02
         self.medium_deg = 6.0
-        self.medium_rad = self.rad_per_deg * self.medium_deg
-        self.medium_translate = 0.04
+        self.medium_rad = self.rad_per_deg * self.medium_deg * (3 / 5)
+        self.medium_translate = 0.04 * (3 / 5)
         self.mode = "position"  #'manipulation' #'navigation'
-        # self.mode = "navigation"
+        # self.mode = "navigation"                              NOTE: changed frm  navigation to position, since navigation does not support base movement
 
+        self.home_odometry = None
+        self.odometry = None
         self.joint_states = None
         self.wrist_image = None
         self.head_image = None
@@ -277,7 +289,7 @@ class HalSkills(hm.HelloNode):
         # ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt")]
         # ckpt_path = ckpts[-1]
         ckpt_path = Path(
-            "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_pepper_salt/9d073908_epoch=20_val_loss=0.001071.pt"
+            "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_pepper_salt/f3bfc93c_epoch=130_val_loss=0.000744.pt"
         )
 
         print(f"Loading {ckpt_path.stem}")
@@ -307,6 +319,31 @@ class HalSkills(hm.HelloNode):
         self.node_name = rospy.get_name()
         rospy.loginfo("{0} started".format(self.node_name))
 
+    def quaternion_to_angle(self, quaternion):
+        z, w = quaternion[2], quaternion[3]
+        t0 = 2.0 * w * z
+        t1 = 1.0 - 2.0 * z * z
+        return math.atan2(t0, t1)
+
+    def odom_callback(self, msg):  # NOTE: callback to set odometry value
+        pose = msg.pose.pose
+        raw_odometry = [
+            pose.position.x,
+            pose.position.y,
+            self.quaternion_to_angle(
+                [
+                    pose.orientation.x,
+                    pose.orientation.y,
+                    pose.orientation.z,
+                    pose.orientation.w,
+                ]
+            ),
+        ]
+        if self.home_odometry is None:
+            self.home_odometry = torch.from_numpy(np.array(raw_odometry))
+
+        self.odometry = torch.from_numpy(np.array(raw_odometry)) - self.home_odometry
+
     def joint_states_callback(self, msg):
         self.joint_states = msg
         js_msg = list(zip(msg.name, msg.position, msg.velocity, msg.effort))
@@ -320,10 +357,7 @@ class HalSkills(hm.HelloNode):
 
     def wrist_image_callback(self, ros_rgb_image):
         try:
-            self.raw_wrist_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, "rgb8")
-            # self.raw_wrist_image = cv2.rotate(
-            #     self.raw_wrist_image, cv2.ROTATE_90_CLOCKWISE
-            # )
+            self.raw_wrist_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, "bgr8")
             self.wrist_image = self.img_transform(self.raw_wrist_image)
             self.wrist_image = self.wrist_image.unsqueeze(0)
         except CvBridgeError as error:
@@ -331,14 +365,44 @@ class HalSkills(hm.HelloNode):
 
     def head_image_callback(self, ros_rgb_image):
         try:
-            self.raw_head_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, "rgb8")
-            self.raw_head_image = cv2.rotate(
-                self.raw_head_image, cv2.ROTATE_90_CLOCKWISE
-            )
+            self.raw_head_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, "bgr8")
             self.head_image = self.img_transform(self.raw_head_image)
             self.head_image = self.head_image.unsqueeze(0)
         except CvBridgeError as error:
             print(error)
+
+    def project_point(self, angle, test_point):
+        # Unit vector coordinates
+        unit_vector = (math.cos(angle), math.sin(angle))
+
+        # Dot product of the test point and unit vector
+        dot_product = test_point[0] * unit_vector[0] + test_point[1] * unit_vector[1]
+
+        # Projected point coordinates
+        projected_point = (dot_product * unit_vector[0], dot_product * unit_vector[1])
+
+        if np.sign(projected_point[0]) == 0 or np.sign(projected_point[0]) == np.sign(
+            unit_vector[0]
+        ):
+            return True
+        else:
+            return False
+
+    def is_point_in_half_circle(self, rotation_angle, center, radius, test_point):
+        center_offset = 0.005
+        unit_vector = np.array([math.cos(rotation_angle), math.sin(rotation_angle)])
+        center += center_offset * unit_vector
+
+        # Translate the test point coordinates relative to the center of the circle
+        translated_point = [test_point[0] - center[0], test_point[1] - center[1]]
+
+        # Calculate the projection of the translated point onto a vector defined by the rotation angle
+        projection = self.project_point(rotation_angle, translated_point)
+
+        if projection and np.linalg.norm(translated_point) <= radius:
+            return True
+        else:
+            return False
 
     def index_to_keypressed(self, index):
         _index_to_keypressed = {
@@ -637,7 +701,7 @@ class HalSkills(hm.HelloNode):
         self.joint_lift_index = self.joint_states.name.index("joint_lift")
         pose = {
             "wrist_extension": 0.01,
-            "joint_lift": self.pick_starting_height - 0.2,  # for cabinet 0.175
+            "joint_lift": self.pick_starting_height - 0.35,  # for cabinet -0.175
             "joint_wrist_pitch": 0.2,
             "joint_wrist_yaw": -0.09,
         }
@@ -824,6 +888,9 @@ class HalSkills(hm.HelloNode):
         extension = joint_state[0]
         yaw = joint_state[1]
         lift = joint_state[2]
+        base_x = joint_state[3]
+        base_y = joint_state[4]
+        base_angle = joint_state[5]
 
         gripper_len = 0.22
         base_gripper_yaw = -0.09
@@ -832,40 +899,12 @@ class HalSkills(hm.HelloNode):
         x = gripper_len * torch.sin(torch.tensor([yaw_delta]))
         z = lift
 
+        R = np.sqrt(x**2 + y**2)
+        phi = np.arctan2(y, x)
+        x = base_x + R * np.cos(phi + base_angle)
+        y = base_y + R * np.sin(phi + base_angle)
+
         return np.array([x.item(), y.item(), z])
-
-    def project_point(self, angle, test_point):
-        # Unit vector coordinates
-        unit_vector = (math.cos(angle), math.sin(angle))
-
-        # Dot product of the test point and unit vector
-        dot_product = test_point[0] * unit_vector[0] + test_point[1] * unit_vector[1]
-
-        # Projected point coordinates
-        projected_point = (dot_product * unit_vector[0], dot_product * unit_vector[1])
-
-        if np.sign(projected_point[0]) == 0 or np.sign(projected_point[0]) == np.sign(
-            unit_vector[0]
-        ):
-            return True
-        else:
-            return False
-
-    def is_point_in_half_circle(self, rotation_angle, center, radius, test_point):
-        center_offset = 0.005
-        unit_vector = np.array([math.cos(rotation_angle), math.sin(rotation_angle)])
-        center += center_offset * unit_vector
-
-        # Translate the test point coordinates relative to the center of the circle
-        translated_point = [test_point[0] - center[0], test_point[1] - center[1]]
-
-        # Calculate the projection of the translated point onto a vector defined by the rotation angle
-        projection = self.project_point(rotation_angle, translated_point)
-
-        if projection and np.linalg.norm(translated_point) <= radius:
-            return True
-        else:
-            return False
 
     @torch.no_grad()
     def main(self):
@@ -873,6 +912,10 @@ class HalSkills(hm.HelloNode):
         # self.node_name = rospy.get_name()
         # rospy.loginfo("{0} started".format(self.node_name))
         print("start of main")
+        self.odom_subscriber = rospy.Subscriber(
+            "/odom", Odometry, self.odom_callback
+        )  # NOTE: subscribe to odom
+
         self.joint_states_subscriber = rospy.Subscriber(
             "/stretch/joint_states", JointState, self.joint_states_callback
         )
@@ -934,7 +977,16 @@ class HalSkills(hm.HelloNode):
             4: 1,
             # arm down
             5: 2,
+            # base forward
+            6: 5,
+            # base back
+            7: 6,
+            # base rotate left
+            8: 7,
+            # base rotate right
+            9: 8,
         }
+
         initial_pos = None
         onpolicy_pos = []
         onpolicy_kp = []
@@ -946,25 +998,54 @@ class HalSkills(hm.HelloNode):
         # ref_text_tokenized = tokenizer(["salt"])
         # text = ["salt"]
         mode = False
-        fixed_goal_pos_tensor = torch.Tensor((0.368, 0.289, 0.823))
+        fixed_goal_pos_tensor = (0, 0, 0)
         use_fixed = False
 
         prev_inputs_wrist = None
         prev_inputs_head = None
+        step = 0
 
-        goal_pos_tensor = torch.Tensor(
-            self.end_eff_to_xyz(self.goal_tensor.cpu().detach().numpy().tolist())
+        goal_pos_tensor = torch.Tensor(self.end_eff_to_xyz(self.goal_tensor))
+
+        joint_pos = self.joint_states.position
+        lift_idx, wrist_idx, yaw_idx = (
+            self.joint_states.name.index("joint_lift"),
+            self.joint_states.name.index("wrist_extension"),
+            self.joint_states.name.index("joint_wrist_yaw"),
         )
 
-        i = 0
-        count = 0
-        goal_sum = torch.tensor(0)
-        for i in range(100):
+        js_data = [
+            (x, y) for (x, y) in zip(self.joint_states.name, self.joint_states.position)
+        ]
+        js_data.sort(key=lambda x: x[0])
+        js_data = [x[1] for x in js_data]
+        js_data = torch.tensor(js_data).unsqueeze(0)
+
+        end_eff_tensor = torch.Tensor(
+            self.end_eff_to_xyz(
+                [
+                    joint_pos[wrist_idx],
+                    joint_pos[yaw_idx],
+                    joint_pos[lift_idx],
+                    self.odometry[0],
+                    self.odometry[1],
+                    self.odometry[2],
+                ]
+            )
+        )
+
+        _pos = (goal_pos_tensor - end_eff_tensor).cpu().numpy()
+        print(f"pos: {_pos}")
+        onpolicy_pos.append(_pos)
+
+        while step < 125:
             if (
                 self.joint_states is not None
                 and self.wrist_image is not None
                 and self.head_image is not None
+                and self.odometry is not None
             ):
+                print("get here")
                 # check delta to determine skill termination
                 if "pick" in self.skill_name and self.check_pick_termination():
                     rospy.loginfo("\n\n***********Pick Completed***********\n\n")
@@ -987,6 +1068,7 @@ class HalSkills(hm.HelloNode):
                 # print(f"Current goal position: {self.goal_tensor}")
 
                 # create current end-effector
+                print(1111111111111)
                 joint_pos = self.joint_states.position
                 lift_idx, wrist_idx, yaw_idx = (
                     self.joint_states.name.index("joint_lift"),
@@ -1010,79 +1092,175 @@ class HalSkills(hm.HelloNode):
                             joint_pos[wrist_idx],
                             joint_pos[yaw_idx],
                             joint_pos[lift_idx],
+                            self.odometry[0],
+                            self.odometry[1],
+                            self.odometry[2],
                         ]
                     )
                 )
+                print(2222222222222)
+                # Wait for a keypress
+                # key = cv2.waitKey(0)
+                # print(key)
+                # if key == ord("s"):
+                #     mode = True
+                #     print("salt")
+                # elif key == ord("p"):
+                #     mode = False
+                #     print("pepper")
+                if mode:
+                    text = ["salt"]
+                    ref_text_tokenized = tokenizer(text)
 
+                else:
+                    text = ["pepper"]
+                    ref_text_tokenized = tokenizer(text)
+                print(33333333333)
+                self.raw_head_image = np.zeros_like(self.raw_head_image)
+                self.head_image = torch.zeros_like(self.head_image)
+                inputs_head = processor(
+                    text=text,
+                    images=Im.fromarray(self.raw_head_image),
+                    return_tensors="pt",
+                ).to("cpu")
+
+                self.raw_wrist_image = np.zeros_like(self.raw_wrist_image)
+                self.wrist_image = torch.zeros_like(self.wrist_image)
+                inputs_wrist = processor(
+                    text=text,
+                    images=Im.fromarray(self.raw_wrist_image),
+                    return_tensors="pt",
+                ).to("cpu")
+                print(444444444444444)
+                start = time.time()
+                if prev_inputs_wrist:
+                    print(
+                        f"{torch.norm(prev_inputs_wrist['pixel_values']-inputs_wrist['pixel_values'])=}"
+                    )
+                prev_inputs_wrist = copy.deepcopy(inputs_wrist)
+                # print(f"{inputs_head=}")
+                # print(f"{inputs_wrist=}")
+                # with torch.no_grad(), torch.cuda.amp.autocast_mode.autocast():
+                #     _, self.goal_pos = self.model.forward_special(
+                #         inputs_head,
+                #         inputs_wrist,
+                #         self.wrist_image,
+                #         self.head_image,
+                #         ref_text_tokenized,
+                #         js_data,
+                #     )
+                print(time.time() - start)
+                print(5555555555555)
+                # goal_prediction = self.model.forward_special(
+                #     inputs_head, self.head_image, ref_text_tokenized
+                # )
+                # goal_pos_tensor = torch.Tensor(self.end_eff_to_xy(*self.goal_pos))
+                # goal_pos_tensor = self.goal_pos[0]
+                # print(goal_pos_tensor.shape)
+                # print(end_eff_tensor.shape)
+                ###############
+                # plt.xlim(-1,1)
+                # plt.ylim(-1,1)
+                # goal_tensors.append(goal_pos_tensor)
+                # goal_pos_tensor[1] = 0.47
+                print(f"Goal Direction is: {self.goal_pos}")
+                # print(end_eff_tensor)
+                # plt.plot(goal_pos_tensor[0],goal_pos_tensor[1],'ro')
+                # plt.plot(end_eff_tensor[0],end_eff_tensor[1],'go')
+                # goal_ext = 0.4
+                # goal_yaw = 0.52
+                # gx,gy = self.end_eff_to_xy(goal_ext,goal_yaw)
+                # print(gx,gy)
+                # plt.plot(gx,gy, color="yellow", marker="*",markersize=14)
+
+                # plt.savefig("yolo.png")
+                # continue
+                ######################
+
+                goal_pos_tensor = torch.Tensor(self.end_eff_to_xyz(self.goal_tensor))
+
+                goal_tensors.append(goal_pos_tensor)
+                end_eff_tensors.append(end_eff_tensor)
+
+                print(f"goal tensor:  {goal_pos_tensor}")
+                print(f"Current EE pos: {end_eff_tensor}")
+                print(6666666666666666)
+                # pred_gy = goal_pos_tensor[1]
+                # curr_gy = end_eff_tensor[1]
+                # if use_fixed == False:
+                #     fixed_goal_pos_tensor = goal_pos_tensor
+                #     use_fixed = True
+                #     print("Using Fixed")
                 if initial_pos is None:
                     initial_pos = [
                         joint_pos[wrist_idx],
                         joint_pos[yaw_idx],
                         joint_pos[lift_idx],
+                        self.odometry[0],
+                        self.odometry[1],
+                        self.odometry[2],
                     ]
-
-                if mode:
-                    text = ["salt"]
-                    # c = tokenizer(text)
-
-                else:
-                    # text = ["pepper"]
-                    # text = ["oregano"]
-                    text = ["asparagus"]
-                    # ref_text_tokenized = tokenizer(text)
-
-                raw_head_pil = Im.fromarray(self.raw_head_image)
-                head_image_encoded = base64.b64encode(raw_head_pil.tobytes()).decode(
-                    "utf-8"
-                )
-                raw_wrist_pil = Im.fromarray(self.raw_wrist_image)
-                wrist_image_encoded = base64.b64encode(raw_wrist_pil.tobytes()).decode(
-                    "utf-8"
-                )
-                payload = {
-                    "head_image": head_image_encoded,
-                    "wrist_image": wrist_image_encoded,
-                    "text": text[0],
-                    # "js_data": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-                    "js_data": js_data.float().cpu().detach().numpy().tolist()[0],
-                }
-                if i % 4 == 0:
-                    start_time = time.time()
-                    resp = requests.post(url, json=payload).json()
-                    print(f"Requests: {time.time() - start_time}")
-                self.goal_pos = torch.Tensor(resp["goal_pos"])
-                print(f"Goal Direction is: {self.goal_pos}")
-                print(f"goal tensor:  {goal_pos_tensor}")
-
-                continue
-
-                # if i == 0:
-                #     goal_pos_tensor[0] = self.goal_pos[0][0]
-                goal_pos_tensor = fixed_goal_pos_tensor
-                goal_tensors.append(goal_pos_tensor)
-                end_eff_tensors.append(end_eff_tensor)
-                print(f"Current EE pos: {end_eff_tensor}")
-
+                print(joint_pos[yaw_idx])
                 if self.is_point_in_half_circle(
                     joint_pos[yaw_idx], goal_pos_tensor[:2], 0.025, end_eff_tensor[:2]
-                ) and (np.abs(goal_pos_tensor[2] - end_eff_tensor[2]) < 0.035):
+                ) and (np.abs(goal_pos_tensor[2] - end_eff_tensor[2]) < 0.015):
                     print("Got to goal!!")
                     self.grasp_primitive()
                     break
-
+                # if torch.norm(goal_pos_tensor[:2] - end_eff_tensor[:2]) < 0.03:
+                #     print("Got to goal!!")
+                #     self.grasp_primitive()
+                #     # self.lift_arm_primitive()
+                #     # self.retract_arm_primitive()
+                #     break
+                # if self.is_2d:
+                #     if use_fixed:
+                #         inp = fixed_goal_pos_tensor - end_eff_tensor
+                #     else:
+                #         inp = torch.cat(
+                #             (
+                #                 goal_pos_tensor - end_eff_tensor,
+                #                 torch.tensor(0).unsqueeze(0),
+                #             ),
+                #             dim=-1,
+                #         )
+                # elif self.use_delta:
+                #     inp = torch.cat((end_eff_tensor, goal_pos_tensor - end_eff_tensor))
+                # else:
+                #     inp = torch.cat((end_eff_tensor, self.goal_tensor))
                 inp = goal_pos_tensor - end_eff_tensor
-
+                inp = inp.unsqueeze(0)
+                # self.joint_states_data = torch.cat((self.joint_states_data, args.user_coordinate
                 start = time.time()
+                print(777777777777777777)
                 print(f"Input to model {inp}")
                 prediction = self.model_ppo(inp)
                 print(f"{prediction=}")
-                print(f"ppo: {time.time() - start}")
-                times.append(time.time() - start)
+
+                # times.append(time.time() - start)
+                print(time.time() - start)
+
+                # prediction = torch.nn.functional.softmax(prediction).flatten()
+                # dist = torch.distributions.Categorical(prediction)
+                # keypressed_index = dist.sample().item()
+                # keypressed = self.index_to_keypressed(keypressed_index)
+
+                # best3 = torch.argsort(prediction).flatten().flip(0)[:3]
+                # probs = torch.nn.functional.softmax(prediction).flatten()
+
+                # print(f"PREDICTION: {INDEX_TO_KEYPRESSED[keypressed_index]}")
+                # print("Best 3")
+                # for i in range(3):
+                #     print(f"Prediction #{i+1}: {INDEX_TO_KEYPRESSED[best3[i].item()]}, {probs[best3[i]]}")
+                # print("-"*50)
 
                 keypressed_index = torch.argmax(prediction).item()
                 keypressed = kp_reduced_mapping[keypressed_index]
                 keypressed = self.index_to_keypressed(keypressed)
 
+                # _pos = self.end_eff_to_xy(
+                #     (self.goal_tensor - end_eff_tensor).cpu().numpy()
+                # )
                 _pos = (goal_pos_tensor - end_eff_tensor).cpu().numpy()
                 print(f"pos: {_pos}")
                 onpolicy_pos.append(_pos)
@@ -1103,10 +1281,14 @@ class HalSkills(hm.HelloNode):
                     continue
 
                 command = self.get_command(keypressed)
-
+                print(88888888888888)
                 print(f"{rospy.Time().now()}, {keypressed_index=}, {command=}")
+                time_start = time.time()
                 self.send_command(command)
+                print("command time: " + str(time.time() - time_start))
+                step += 1
                 # time.sleep(1)
+                print(9999999999999)
             rate.sleep()
         timestr = time.strftime("%Y%m%d-%H%M%S")
         if self.is_2d:
@@ -1120,45 +1302,79 @@ class HalSkills(hm.HelloNode):
         fig = plt.figure()
         ax = plt.axes(xlim=(-1, 1), ylim=(-1, 1))
 
-        def animate(i):
-            ax.clear()  # clear axes
-            ax.set_xlim(-0.05, 0.05)
-            ax.set_ylim(0.4, 0.6)
+        # def animate(i):
+        #     ax.clear()  # clear axes
+        #     ax.set_xlim(-0.05, 0.05)
+        #     ax.set_ylim(0.4, 0.6)
 
-            ax.plot(goal_tensors[i][0], goal_tensors[i][1], "ro")
-            # ax.plot(end_eff_tensors[i][0], end_eff_tensors[i][1], 'go')
+        #     ax.plot(goal_tensors[i][0], goal_tensors[i][1], "ro")
+        #     # ax.plot(end_eff_tensors[i][0], end_eff_tensors[i][1], 'go')
 
-            return ax
+        #     return ax
 
-        anim = animation.FuncAnimation(
-            fig, animate, frames=len(goal_tensors), interval=1000
+        # anim = animation.FuncAnimation(
+        #     fig, animate, frames=len(goal_tensors), interval=1000
+        # )
+        # anim.save("points.gif", writer="imagemagick", fps=10)
+        # clip = VideoFileClip("points.gif")
+        # # Save the resulting MP4 file
+        # clip.write_videofile("points.mp4", fps=10)
+        # for i in range(len(goal_tensors)):
+        #     plt.plot([goal_tensors[i][0], goal_tensors[i][1]], color="red")
+        #     plt.plot([end_eff_tensors[i][0], end_eff_tensors[i][1]], color="green")
+        #     plt.show()
+        # start_ext = initial_pos[0]
+        # start_yaw = initial_pos[1]
+        # goal_ext = self.goal_pos[0][0]
+        # goal_yaw = self.goal_pos[0][1]
+        # ckpt_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_pepper_salt/d745bda3_epoch=100_val_loss=0.000173.pt"
+        # save_fig_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/base_ppo"
+        # sim_x, sim_y, sim_onpolicy_kp = simulate.run_simulate(
+        #     start_ext, start_yaw, goal_ext, goal_yaw, ckpt_path, save_fig_path
+        # )
+
+        hyperparameters = {
+            "gamma": (1 - 0.0763619061360584),
+            "max_grad_norm": 0.7876864744938158,
+            "n_steps": 128,
+            "learning_rate": 0.00021175129610218643,
+            "ent_coef": 0.08297853628113681,
+            "gae_lambda": (1 - 0.005645587760538626),
+            "policy_kwargs": {
+                # "net_arch": {"pi": [64, 64], "vf": [64, 64], "activation_fn":'relu'}
+                # "net_arch": {"pi": [64], "vf": [64]}
+                "net_arch": {
+                    "pi": [100, 100, 100],
+                    "vf": [100, 100, 100],
+                    "activation_fn": "relu",
+                }
+                # "net_arch": {"pi": [100, 100, 100, 100], "vf": [100, 100, 100, 100], "activation_fn":'tanh'}
+            },
+        }
+
+        # num_cpu = 8
+        # env_id = "HalControllerEnv"
+        # vec_env = make_vec_env(env_id, n_envs=num_cpu)
+        # model = PPO("MlpPolicy", vec_env, verbose=1, device="cuda", **hyperparameters)
+        # model.load(
+        #     "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/ppo_full_2600_small_relu.zip"
+        # )
+        env = hal_controller_full_train.HalControllerEnv(max_steps=step)
+        print(initial_pos)
+        success_rate, state_list, action_list, _ = hal_controller_full_train.evaluate(
+            self.model_ppo,
+            env,
+            start=initial_pos,
+            goal=self.goal_pos,
         )
-        anim.save("points.gif", writer="imagemagick", fps=10)
-        clip = VideoFileClip("points.gif")
-        # Save the resulting MP4 file
-        clip.write_videofile("points.mp4", fps=10)
-        for i in range(len(goal_tensors)):
-            plt.plot([goal_tensors[i][0], goal_tensors[i][1]], color="red")
-            plt.plot([end_eff_tensors[i][0], end_eff_tensors[i][1]], color="green")
-            plt.show()
-        start_ext = initial_pos[0]
-        start_yaw = initial_pos[1]
-        goal_ext = self.goal_pos[0][0]
-        goal_yaw = self.goal_pos[0][1]
-        ckpt_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_pepper_salt/d745bda3_epoch=100_val_loss=0.000173.pt"
-        save_fig_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_6_graphs"
-        sim_x, sim_y, sim_onpolicy_kp = simulate.run_simulate(
-            start_ext, start_yaw, goal_ext, goal_yaw, ckpt_path, save_fig_path
-        )
-
+        state_list = np.array(state_list)
+        print(f"onpolicy initial:  {onpolicy_pos[0]}")
         self.overlay_plot(
-            sim_x,
-            sim_y,
-            sim_onpolicy_kp,
-            onpolicy_pos,
+            state_list,
+            action_list,
             onpolicy_kp,
-            goal,
-            title,
+            onpolicy_pos,
+            "ppo_full_2600_small_relu",
             save_dir="plots",
         )
         # self.overlay_plot(self, sim_x, sim_y, onpolicy_kp, pts, labels, goal, title, file=None, save_dir='temp')
@@ -1273,63 +1489,264 @@ class HalSkills(hm.HelloNode):
 
         return pts, predicted_kps
 
+    def plot_traj_no_save(
+        self, kp_mapping, state_list, action_list, goal, s, alpha, title
+    ):
+        fig = plt.figure()
+        ax = fig.add_subplot(projection="3d")
+        ax.grid()
+
+        st = np.array(state_list)
+        plot_x = st[:, 0]
+        plot_y = st[:, 1]
+        plot_z = st[:, 2]
+        sim_scatter = ax.scatter(
+            plot_x[:-1],
+            plot_y[:-1],
+            plot_z[:-1],
+            s=s,
+            c=action_list,
+            cmap="viridis",
+            alpha=alpha,
+        )
+        handles, _ = sim_scatter.legend_elements()
+
+        filtered_kp_mapping = [kp_mapping[i] for i in np.unique(action_list)]
+        plt.legend(handles, filtered_kp_mapping, title="Key Presses")
+
+        # Plot the start
+        plt.plot(
+            [plot_x[0]],
+            [plot_y[0]],
+            [plot_z[0]],
+            marker=".",
+            markersize=15,
+            color="pink",
+            label="start",
+        )
+
+        # Plot the goal
+        plt.plot(
+            [goal[0]],
+            [goal[1]],
+            [goal[2]],
+            marker="*",
+            markersize=15,
+            color="red",
+            label="goal",
+        )
+
+        # Plot the end of trajectory with no action
+        plt.plot(
+            [plot_x[-1]],
+            [plot_y[-1]],
+            [plot_z[-1]],
+            marker=".",
+            markersize=5,
+            color="orange",
+            label="end",
+        )
+
+        ax.set_xlim(-0.25, 0.25)
+        ax.set_ylim(-0.68, 0.68)
+        ax.set_zlim(-1, 1)
+        plt.title("HAL Controller Sim with PPO")
+
+        save_dir = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/base_ppo"
+        save_path = Path(save_dir, f"{title.replace(' ', '_')}.png")
+        save_path.parent.mkdir(exist_ok=True)
+        plt.savefig(
+            save_path,
+            dpi=300,
+            bbox_inches="tight",
+        )
+
     def overlay_plot(
         self,
-        sim_x,
-        sim_y,
+        sim_states,
+        sim_actions,
         onpolicy_kp,
         pts,
-        labels,
-        goal,
         title,
-        file=None,
         save_dir="temp",
     ):
         import matplotlib
 
+        print(f"sim actions: {sim_actions}")
         matplotlib.use("Agg")
         sim_kp_mapping = [
             "Sim Arm out",
             "Sim Arm in",
-            "Sim Gripper left",
             "Sim Gripper right",
+            "Sim Gripper left",
+            "Sim Lift Up",
+            "Sim Lift Down",
+            "Sim Base Left",
+            "Sim Base Right",
+            "Sim Base Rotate Left",
+            "Sim Base Rotate Right",
         ]
 
-        pts = np.array(pts)
-        labels = np.array(labels)
-        print(f"shape: {pts.shape}")
+        fig = plt.figure()
+        ax = fig.add_subplot(projection="3d")
+        ax.grid()
 
-        x_min, x_max = pts[:, 0].min(), pts[:, 0].max()
-        y_min, y_max = pts[:, 1].min(), pts[:, 1].max()
-
-        scatter = plt.scatter(
-            pts[:, 0], -pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
+        st = np.array(sim_states)
+        plot_x = st[:, 0]
+        plot_y = st[:, 1]
+        plot_z = st[:, 2]
+        sim_scatter = ax.scatter(
+            plot_x[:-1],
+            plot_y[:-1],
+            plot_z[:-1],
+            s=2,
+            c=sim_actions,
+            cmap="viridis",
+            alpha=1,
         )
-        plt.plot(goal[0], -goal[1], marker="*", markersize=10, color="red")
-        plt.plot(pts[0, 0], -pts[0, 1], marker="o", markersize=8, color="green")
-        handles, _ = scatter.legend_elements()
-        plt.legend(handles, [kp_mapping[i] for i in np.unique(labels)], title="Classes")
+        handles, _ = sim_scatter.legend_elements()
 
-        plt.xlabel("Relative x")
-        plt.ylabel("Relative y")
-        x_lim = [x_min - 0.5, x_max + 0.5]
-        y_lim = [-(y_max + 0.5), -(y_min - 0.5)]
-        plt.xlim(x_lim[0], x_lim[1])
-        plt.ylim(y_lim[0], y_lim[1])
-        # plt.xlim(-0.6,0.8)
-        # plt.ylim(-0.4,0.8)
-        plt.title(title)
+        # filtered_kp_mapping = [sim_kp_mapping[i] for i in np.unique(sim_actions)]
+        # plt.legend(handles, filtered_kp_mapping, title="Key Presses")
 
-        # plotting sim
-
-        scatter = plt.scatter(
-            sim_x, sim_y, c=onpolicy_kp, cmap="viridis", s=2, alpha=0.3
+        # Plot the start
+        plt.plot(
+            [plot_x[0]],
+            [plot_y[0]],
+            [plot_z[0]],
+            marker=".",
+            markersize=15,
+            color="pink",
+            label="start",
         )
-        handles2, _ = scatter.legend_elements()
+
+        # Plot the goal
+        plt.plot(
+            [0],
+            [0],
+            [0],
+            marker="*",
+            markersize=15,
+            color="red",
+            label="goal",
+        )
+
+        # Plot the end of trajectory with no action
+        plt.plot(
+            [plot_x[-1]],
+            [plot_y[-1]],
+            [plot_z[-1]],
+            marker=".",
+            markersize=5,
+            color="orange",
+            label="end",
+        )
+
+        # on policy plots
+        st = np.array(pts)
+        plot_x = st[:, 0]
+        plot_y = st[:, 1]
+        plot_z = st[:, 2]
+        sim_scatter = ax.scatter(
+            plot_x[:-1],
+            plot_y[:-1],
+            plot_z[:-1],
+            s=1,
+            c=onpolicy_kp,
+            cmap="viridis",
+            alpha=0.3,
+        )
+        handles2, _ = sim_scatter.legend_elements()
+
+        # filtered_kp_mapping = [sim_kp_mapping[i] for i in np.unique(sim_actions)]
+        # plt.legend(handles, filtered_kp_mapping, title="Key Presses")
+
+        # Plot the start
+        plt.plot(
+            [plot_x[0]],
+            [plot_y[0]],
+            [plot_z[0]],
+            marker=".",
+            markersize=15,
+            color="pink",
+            label="start",
+        )
+
+        # Plot the goal
+        plt.plot(
+            [0],
+            [0],
+            [0],
+            marker="*",
+            markersize=15,
+            color="red",
+            label="goal",
+        )
+
+        # Plot the end of trajectory with no action
+        plt.plot(
+            [plot_x[-1]],
+            [plot_y[-1]],
+            [plot_z[-1]],
+            marker=".",
+            markersize=5,
+            color="orange",
+            label="end",
+        )
+
+        ax.set_xlim(-0.5, 0)
+        ax.set_ylim(0, 0.5)
+        ax.set_zlim(0, 0.2)
+
+        # self.plot_traj_no_save(
+        #     kp_mapping, pts, onpolicy_kp, [0, 0, 0], s=5, alpha=1, title=title
+        # )
+        # self.plot_traj_no_save(
+        #     sim_kp_mapping,
+        #     sim_states,
+        #     sim_actions,
+        #     [0, 0, 0],
+        #     s=2,
+        #     alpha=0.3,
+        #     title=title,
+        # )
+
+        # pts = np.array(pts)
+        # labels = np.array(labels)
+        # print(f"shape: {pts.shape}")
+
+        # x_min, x_max = pts[:, 0].min(), pts[:, 0].max()
+        # y_min, y_max = pts[:, 1].min(), pts[:, 1].max()
+
+        # scatter = plt.scatter(
+        #     pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
+        # )
+        # plt.plot([0], [0], marker="*", markersize=10, color="red")
+        # plt.plot(pts[0, 0], pts[0, 1], marker="o", markersize=8, color="green")
+        # handles, _ = scatter.legend_elements()
+        # plt.legend(handles, [kp_mapping[i] for i in np.unique(labels)], title="Classes")
+
+        # plt.xlabel("Relative x")
+        # plt.ylabel("Relative y")
+        # x_lim = [x_min - 0.5, x_max + 0.5]
+        # y_lim = [-(y_max + 0.5), -(y_min - 0.5)]
+        # plt.xlim(x_lim[0], x_lim[1])
+        # plt.ylim(y_lim[0], y_lim[1])
+        # # plt.xlim(-0.6,0.8)
+        # # plt.ylim(-0.4,0.8)
+        # plt.title(title)
+
+        # # plotting sim
+
+        # scatter = plt.scatter(
+        #     sim_x[:-1], sim_y[:-1], c=onpolicy_kp, cmap="viridis", s=2, alpha=0.3
+        # )
+
+        # handles2, _ = scatter.legend_elements()
         plt.legend(
-            handles + handles2,
-            [kp_mapping[i] for i in np.unique(labels)]
-            + [sim_kp_mapping[i] for i in np.unique(onpolicy_kp)],
+            handles2 + handles,
+            [kp_mapping[i] for i in np.unique(onpolicy_kp)]
+            + [sim_kp_mapping[i] for i in np.unique(sim_actions)],
             title="Classes",
         )
 
@@ -1342,7 +1759,7 @@ class HalSkills(hm.HelloNode):
 
         # scatter = plt.scatter(dec_bound_pts[:, 0], dec_bound_pts[:, 1], c=dec_bound_kps, cmap="viridis", s=5, alpha=0.01)
 
-        save_dir = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/sep_18_graphs"
+        save_dir = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/base_ppo"
         save_path = Path(save_dir, f"{title.replace(' ', '_')}.png")
         save_path.parent.mkdir(exist_ok=True)
         plt.savefig(
@@ -1350,9 +1767,9 @@ class HalSkills(hm.HelloNode):
             dpi=300,
             bbox_inches="tight",
         )
-
-        with open(f"{title}.pickle", "wb") as pickle_file:
-            pl.dump(fig_handle, pickle_file)
+        plt.show()
+        # with open(f"{title}.pickle", "wb") as pickle_file:
+        #     pl.dump(fig_handle, pickle_file)
 
         plt.close()
 

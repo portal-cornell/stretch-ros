@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 from collections import Counter
+import pdb
 
 sys.path.insert(0, str(Path.cwd().parent.parent))
 
@@ -11,11 +12,22 @@ import torchvision
 import torch
 import torch.nn as nn
 from torch import optim
+import open_clip
 from torchvision.models import resnet18, convnext_tiny
+from torchvision.transforms.functional import crop
 import torchmetrics
-from utils.common import get_end_eff, get_end_eff_yaw_ext
 from sklearn.metrics import balanced_accuracy_score, accuracy_score
 import random
+import bitsandbytes as bnb
+from einops import rearrange
+from einops.layers.torch import Rearrange
+from torchvision.transforms import Resize
+
+import torch.nn.functional as F
+
+
+# from transformers import OwlViTForObjectDetection
+from transformers import Owlv2ForObjectDetection
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -134,36 +146,6 @@ class MLP(nn.Module):
         return self.model(x)
 
 
-# class MLP(nn.Module):
-#         def __init__(self):
-#             super().__init__()
-#             hidden_dim = 100
-#             self.num_classes = 4
-#             self.fc_input_dims = 4
-#             self.linear1 = nn.Linear(self.fc_input_dims, hidden_dim)
-#             self.linear2 = nn.Linear(hidden_dim, hidden_dim)
-#             self.linear3 = nn.Linear(hidden_dim, self.num_classes)
-#             self.dropout1 = nn.Dropout(p=0.5)
-#             self.dropout2 = nn.Dropout(p=0.5)
-#             self.norm1 = nn.LayerNorm(hidden_dim)
-#             self.norm2 = nn.LayerNorm(hidden_dim)
-#             self.activation = nn.GELU()
-
-#             self.fc = nn.Sequential(
-#                 self.linear1,
-#                 self.norm1,
-#                 self.dropout1,
-#                 self.activation,
-#                 self.linear2,
-#                 self.norm2,
-#                 self.dropout2,
-#                 self.activation,
-#                 self.linear3,
-#             )
-#         def forward(self,x):
-#             return self.fc(x)
-
-
 import math
 
 
@@ -187,65 +169,47 @@ def adjust_learning_rate(optimizer, epoch, lr, min_lr, num_epochs, warmup_epochs
 class BC(nn.Module):
     def __init__(
         self,
-        skill_name,
-        joint_state_dims,
         num_classes,
         lr=1e-3,
         max_epochs=1e5,
-        img_comp_dims=32,
-        use_wrist_img=True,
-        use_head_img=True,
-        use_end_eff=True,
-        device="cuda",
+        device="cpu",
     ):
         super().__init__()
-        self.is_2d = True
         self.num_classes = num_classes
+        # TODO: calculate new weights on our data
         weights = torch.FloatTensor([0.43317524, 0.0, 3.39238095, 2.52087757])
         self.loss_fn = nn.CrossEntropyLoss(weight=weights)
-        self.goal_loss = nn.SmoothL1Loss()
+        self.goal_loss = nn.SmoothL1Loss(reduction="none")
+        self.goal_weights = torch.tensor([1, 1]).to("cpu")
         self.accuracy = torchmetrics.Accuracy(
             task="multiclass", num_classes=self.num_classes, top_k=1
         )
         self.max_epochs = max_epochs
         self.warmup_epochs = max_epochs // 10
         # metadata
-        self.skill_name = skill_name
         self.device = device
         self.lr = lr
         self.min_lr = lr / 1e3
-        self.use_wrist_img = use_wrist_img
-        self.use_head_img = use_head_img
-        self.use_end_eff = use_end_eff
 
         # network
-        self.img_comp_dims = img_comp_dims
-        self.joint_state_dims = joint_state_dims
         self.end_eff_dims = 2
-        self.fc_input_dims = img_comp_dims + img_comp_dims
-
-        self.conv_net = convnext_tiny(
-            torchvision.models.convnext.ConvNeXt_Tiny_Weights.DEFAULT
+        self.model, _, _ = open_clip.create_model_and_transforms(
+            "EVA02-B-16", pretrained="merged2b_s8b_b131k"
         )
-        self.conv_net.fc = nn.Identity()
-        self.conv_net2 = convnext_tiny(
-            torchvision.models.convnext.ConvNeXt_Tiny_Weights.DEFAULT
+        # self.object_model = OwlViTForObjectDetection.from_pretrained(
+        #     "google/owlvit-base-patch32"
+        # )
+        self.object_model = Owlv2ForObjectDetection.from_pretrained(
+            "google/owlv2-base-patch16-ensemble"
         )
-        self.conv_net2.fc = nn.Identity()
 
         self.fc = nn.Sequential(
-            # nn.Linear(2000,100),
-            # nn.LayerNorm(100),
-            # nn.GELU(),
-            # nn.Linear(100,100),
-            # nn.LayerNorm(100),
-            # nn.GELU(),
-            # nn.Linear(100,2)
-            MLPBlock(2000, 100, dropout=0),
-            MLPBlock(100, 100, dropout=0),
-            MLPBlock(100, 100, dropout=0),
-            nn.Linear(100, 2),
+            MLPBlock(512, 512, dropout=0.1),
+            MLPBlock(512, 512, dropout=0.1),
+            MLPBlock(512, 512, dropout=0.1),
+            nn.Linear(512, 2),
         )
+
         config = {
             "input_size": 2,
             "output_size": num_classes,
@@ -256,77 +220,164 @@ class BC(nn.Module):
             "activation": nn.GELU,
         }
         self.fc_last = MLP(**config)
-        # self.fc_last1 = MLPBlock(100,100,2,dropout=0.2)
-        # self.fc_last2 = MLPBlock(100,100,2,dropout=0.2)
-        # self.fc_last3 = nn.Linear(102,4)
-        # self.fc_last = MLP()
-        # state_dict = torch.load("/share/portal/jlr429/hal-skill-repo/point_and_shoot_debug/ckpts/20230905-180606_use_delta/epoch=900_mean_deltas=0.021.pt", map_location=torch.device(device))
-        state_dict = torch.load(
-            "/share/portal/nlc62/hal-skill-repo/point_and_shoot_debug/ckpts/20230922-013559_2d/epoch=300_success=1.000.pt",
-            map_location=torch.device(device),
-        )
-        for key in list(state_dict.keys()):
-            state_dict[key.replace("fc.", "")] = state_dict.pop(key)
-        miss_keys, unexpected_keys = self.fc_last.load_state_dict(
-            state_dict, strict=False
-        )
-        print(miss_keys)
-        print(unexpected_keys)
+
         # loss/accuracy
-        self.optimizer = optim.AdamW(
-            [
-                {"params": self.conv_net.parameters()},
-                {"params": self.conv_net2.parameters()},
-                {"params": self.fc.parameters()},
-            ],
+        self.box_linear = nn.Sequential(
+            MLPBlock(4, 512, dropout=0.1),
+            MLPBlock(512, 512, dropout=0.1),
+            MLPBlock(512, 512, dropout=0.1),
+            nn.Linear(512, 2),
+        )
+        self.optimizer = bnb.optim.AdamW8bit(
+            [{"params": self.box_linear.parameters()}],
             lr=lr,
         )
         # self.optimizer = optim.AdamW(
         #        self.parameters()
         #     , lr=lr)
 
-    def forward(
-        self, wrist_img, head_img, curr_x, curr_y
-    ):  ##js_data,goal_pos,return_loss = True):
-        batch_size = wrist_img.size(0)
-        device = wrist_img.device
-        if self.use_wrist_img:
-            img_t = self.conv_net(wrist_img)
-        else:
-            img_t = torch.zeros((batch_size, self.img_comp_dims))
-        if self.use_head_img:
-            img_t2 = self.conv_net2(head_img)
-        else:
-            img_t2 = torch.zeros((batch_size, self.img_comp_dims))
-        # if self.use_end_eff:
-        #     curr_x, curr_y = get_end_eff_yaw_ext(js_data)
-        # else:
-        #     curr_x = torch.zeros((batch_size, 1))
-        #     curr_y = torch.zeros((batch_size, 1))
-        img_t = img_t.to(device)
-        img_t2 = img_t2.to(device)
-        curr_x = curr_x.to(device).unsqueeze(1)
-        curr_y = curr_y.to(device).unsqueeze(1)
-        # info  = torch.cat((curr_x,curr_y),dim = 1)
+    def get_top_k_boxes(self, predicted_boxes, scores, k):
+        # Sort the scores tensor in descending order along the num_boxes dimension
+        sorted_scores = torch.argsort(scores, dim=1, descending=True)
 
-        x = torch.cat((img_t, img_t2), dim=1)
-        x = self.fc(x)
-        # gt = torch.cat(((goal_pos[:,0].unsqueeze(1)-curr_x), (goal_pos[:,1].unsqueeze(1)-curr_y)), dim=1)
+        # Take the top 4 indices from each batch
+        top_k_indices = sorted_scores[:, :k]
+        top_k_boxes = torch.gather(
+            predicted_boxes,
+            1,
+            top_k_indices.unsqueeze(-1).expand(-1, -1, predicted_boxes.size(-1)),
+        )
+        return top_k_boxes
 
-        # if return_loss:
-        #     loss_goal = self.goal_loss(x,goal_pos)
+    def posemb_sincos_2d(
+        self, h, w, dim, temperature: int = 10000, dtype=torch.float32
+    ):
+        y, x = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+        assert (dim % 4) == 0, "feature dimension must be multiple of 4 for sincos emb"
+        omega = torch.arange(dim // 4) / (dim // 4 - 1)
+        omega = 1.0 / (temperature**omega)
+
+        y = y.flatten()[:, None] * omega[None, :]
+        x = x.flatten()[:, None] * omega[None, :]
+        pe = torch.cat((x.sin(), x.cos(), y.sin(), y.cos()), dim=1)
+        return pe.type(dtype)
+
+    def forward(self, inputs, head_img, ref_text, js_data, goal_pos, return_loss=True):
+        k = 4
+        with torch.no_grad():
+            outputs = self.object_model(**inputs)
+            logits = torch.max(outputs["logits"], dim=-1)
+            scores = torch.sigmoid(logits.values)
+            boxes = self.get_top_k_boxes(outputs["pred_boxes"], scores, k)
+            cx, cy, w, h = (
+                boxes[:, :, 0],
+                boxes[:, :, 1],
+                boxes[:, :, 2],
+                boxes[:, :, 3],
+            )
+            x = (
+                (cx * head_img.shape[2] - w * head_img.shape[2] / 2)
+                .to(torch.int)
+                .squeeze(0)
+                .cpu()
+                .detach()
+                .tolist()
+            )
+            y = (
+                (cy * head_img.shape[3] - h * head_img.shape[3] / 2)
+                .to(torch.int)
+                .squeeze(0)
+                .cpu()
+                .detach()
+                .tolist()
+            )
+            w = (w * head_img.shape[2]).to(torch.int).squeeze(0).cpu().detach().tolist()
+            h = (h * head_img.shape[3]).to(torch.int).squeeze(0).cpu().detach().tolist()
+
+            cropped_imgs = []
+            for i in range(k):
+                cropped_img = crop(head_img, y[i], x[i], h[i], w[i])
+                cropped_imgs.append(Resize((224, 224))(cropped_img))
+            cropped_imgs = torch.stack(cropped_imgs).squeeze(1)
+            img_embeddings = self.model.visual(cropped_imgs)
+            text_embeddings = self.model.encode_text(ref_text)
+            img_embeddings /= img_embeddings.norm(dim=-1, keepdim=True)
+            text_embeddings /= text_embeddings.norm(dim=-1, keepdim=True)
+            dot_product = img_embeddings @ text_embeddings.T
+            dot_soft = F.softmax(dot_product, dim=0)
+            amax = int(torch.argmax(dot_soft).item())
+
+        best_box = boxes[:, amax]
+        x = self.box_linear(best_box)
+
+        if return_loss:
+            loss_goal = self.goal_loss(x, goal_pos)
+            loss_goal = loss_goal * self.goal_weights
+            loss_goal = torch.mean(loss_goal)
         g_x, g_y = x[:, 0].unsqueeze(1), x[:, 1].unsqueeze(1)
 
         # inp_x = torch.cat((curr_x,curr_y,(g_x-curr_x),(g_y-curr_y)), dim=1).float()
+        # curr_x, curr_y = get_end_eff_yaw_ext(js_data)
+
+        curr_x = curr_x.to(self.device).unsqueeze(1)
+        curr_y = curr_y.to(self.device).unsqueeze(1)
         inp_x = torch.cat(((g_x - curr_x), (g_y - curr_y)), dim=1).float()
         x = self.fc_last(inp_x)
-        # if return_loss:
-        #     return x, loss_goal
-        # else:
-        return x, torch.cat((g_x, g_y), dim=1)
+        if return_loss:
+            return x, loss_goal
+        else:
+            return x  # torch.cat((g_x,g_y),dim=1)
+
+    def forward_special(self, inputs, head_img, ref_text, js_data):
+        k = 4
+        with torch.no_grad():
+            outputs = self.object_model(**inputs)
+            logits = torch.max(outputs["logits"], dim=-1)
+            scores = torch.sigmoid(logits.values)
+            boxes = self.get_top_k_boxes(outputs["pred_boxes"], scores, k)
+            cx, cy, w, h = (
+                boxes[:, :, 0],
+                boxes[:, :, 1],
+                boxes[:, :, 2],
+                boxes[:, :, 3],
+            )
+            x = (
+                (cx * head_img.shape[2] - w * head_img.shape[2] / 2)
+                .to(torch.int)
+                .squeeze(0)
+                .cpu()
+                .detach()
+                .tolist()
+            )
+            y = (
+                (cy * head_img.shape[3] - h * head_img.shape[3] / 2)
+                .to(torch.int)
+                .squeeze(0)
+                .cpu()
+                .detach()
+                .tolist()
+            )
+            w = (w * head_img.shape[2]).to(torch.int).squeeze(0).cpu().detach().tolist()
+            h = (h * head_img.shape[3]).to(torch.int).squeeze(0).cpu().detach().tolist()
+
+            cropped_imgs = []
+            for i in range(k):
+                cropped_img = crop(head_img, y[i], x[i], h[i], w[i])
+                cropped_imgs.append(Resize((224, 224))(cropped_img))
+            cropped_imgs = torch.stack(cropped_imgs).squeeze(1)
+            img_embeddings = self.model.visual(cropped_imgs)
+            text_embeddings = self.model.encode_text(ref_text)
+            img_embeddings /= img_embeddings.norm(dim=-1, keepdim=True)
+            text_embeddings /= text_embeddings.norm(dim=-1, keepdim=True)
+            dot_product = img_embeddings @ text_embeddings.T
+            dot_soft = F.softmax(dot_product, dim=0)
+            amax = int(torch.argmax(dot_soft).item())
+
+        best_box = boxes[:, amax]
+        x = self.box_linear(best_box)
+        return x, best_box
 
     def train_loop(self, train_dataloader, epoch, ctx, scaler):
-        bad_yaws = 0
         losses, losses_ce, accuracy = [], [], []
         for batch in tqdm(
             train_dataloader,
@@ -337,30 +388,32 @@ class BC(nn.Module):
             leave=False,
         ):
             self.batch_to_device(batch, self.device)
-            wrist_img, head_img, joint_state, goal_pos, key_pressed = batch.values()
-            idx = good_yaw_only(joint_state)
-            # import pdb; pdb.set_trace()
-            wrist_img, head_img, joint_state, goal_pos, key_pressed = (
-                wrist_img[idx],
-                head_img[idx],
-                joint_state[idx],
-                goal_pos[idx],
-                key_pressed[idx],
-            )
+            (
+                inputs,
+                head_img,
+                ref_text_tokenized,
+                joint_state,
+                goal_pos,
+                key_pressed,
+            ) = batch.values()
+            # idx = good_yaw_only(joint_state)
+            # wrist_img, head_img, joint_state, ref_text_tokenized, goal_pos, key_pressed = wrist_img[idx], head_img[idx], joint_state[idx], ref_text_tokenized[idx],  goal_pos[idx], key_pressed[idx]
             if joint_state.size == 0:
                 print("Unlikely event of all bad yaw")
                 continue
             with ctx:
                 predicted_action, loss = self(
-                    wrist_img, head_img, joint_state, goal_pos
+                    inputs, head_img, ref_text_tokenized, joint_state, goal_pos
                 )
-                actual_action = key_pressed.to(torch.int64).squeeze()
+                actual_action = key_pressed.to(torch.int64)
                 # loss_goal = self.goal_loss(predicted_delta, gt)
+                # pdb.set_trace()
                 loss_action = self.loss_fn(predicted_action, actual_action)
             # loss += loss_action
             self.optimizer.zero_grad()
             scaler.scale(loss).backward()
             # loss.backward()
+            nn.utils.clip_grad_norm_(self.parameters(), 3.0)
             scaler.step(self.optimizer)
             # self.optimizer.step()
             scaler.update()
@@ -398,24 +451,25 @@ class BC(nn.Module):
             leave=False,
         ):
             self.batch_to_device(batch, self.device)
-            wrist_img, head_img, joint_state, goal_pos, key_pressed = batch.values()
-            idx = good_yaw_only(joint_state)
-            wrist_img, head_img, joint_state, goal_pos, key_pressed = (
-                wrist_img[idx],
-                head_img[idx],
-                joint_state[idx],
-                goal_pos[idx],
-                key_pressed[idx],
-            )
+            (
+                inputs,
+                head_img,
+                ref_text_tokenized,
+                joint_state,
+                goal_pos,
+                key_pressed,
+            ) = batch.values()
+            # idx = good_yaw_only(joint_state)
+            # wrist_img, head_img, joint_state, ref_text_tokenized, goal_pos, key_pressed = wrist_img[idx], head_img[idx], joint_state[idx], ref_text_tokenized[idx], goal_pos[idx], key_pressed[idx]
             if joint_state.size == 0:
                 print("Unlikely event of all bad yaw")
                 continue
             # predicted_action = self(wrist_img, joint_state, image2=head_img)
             with ctx:
                 predicted_action, loss = self(
-                    wrist_img, head_img, joint_state, goal_pos
+                    inputs, head_img, ref_text_tokenized, joint_state, goal_pos
                 )
-                actual_action = key_pressed.to(torch.int64).squeeze()
+                actual_action = key_pressed.to(torch.int64)
                 # loss_goal = self.goal_loss(predicted_delta, gt)
                 loss_action = self.loss_fn(predicted_action, actual_action)
             # loss += loss_action
@@ -444,22 +498,23 @@ class BC(nn.Module):
             leave=False,
         ):
             self.batch_to_device(batch, self.device)
-            wrist_img, head_img, joint_state, goal_pos, key_pressed = batch.values()
-            idx = good_yaw_only(joint_state)
-            wrist_img, head_img, joint_state, goal_pos, key_pressed = (
-                wrist_img[idx],
-                head_img[idx],
-                joint_state[idx],
-                goal_pos[idx],
-                key_pressed[idx],
-            )
+            (
+                wrist_img,
+                head_img,
+                ref_text_tokenized,
+                joint_state,
+                goal_pos,
+                key_pressed,
+            ) = batch.values()
+            # idx = good_yaw_only(joint_state)
+            # wrist_img, head_img, joint_state, ref_text_tokenized, goal_pos, key_pressed = wrist_img[idx], head_img[idx], joint_state[idx], ref_text_tokenized[idx], goal_pos[idx], key_pressed[idx]
             if joint_state.size == 0:
                 print("Unlikely event of all bad yaw")
                 continue
             # predicted_action = self(wrist_img, joint_state, image2=head_img)
             with ctx:
-                predicted_action, loss = self(
-                    wrist_img, head_img, joint_state, goal_pos
+                predicted_action, _ = self(
+                    wrist_img, head_img, ref_text_tokenized, joint_state, goal_pos
                 )
                 predicted_action = torch.argmax(predicted_action, dim=1)
                 actual_action = key_pressed.to(torch.int64).squeeze()

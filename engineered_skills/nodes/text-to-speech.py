@@ -21,7 +21,7 @@ class SpeechPlanner:
 
         self.action_status = NOT_STARTED
 
-        s = rospy.Service('speech_server', Speech, self.callback)
+        s = rospy.Service('hal_speech_server', Speech, self.callback)
         rospy.loginfo("Speech server has started")
         rospy.spin()
 
@@ -66,7 +66,6 @@ CHUNK = 1024
 def synthesize_text(input_text):
     """Synthesizes speech from the input string of text."""
     from google.cloud import texttospeech
-
     client = texttospeech.TextToSpeechClient()
 
     input_text = texttospeech.SynthesisInput(text=input_text)
@@ -75,8 +74,8 @@ def synthesize_text(input_text):
     # Names of voices can be retrieved with client.list_voices().
     voice = texttospeech.VoiceSelectionParams(
         language_code="en-US",
-        name="en-US-Standard-C",
-        ssml_gender=texttospeech.SsmlVoiceGender.FEMALE,
+        name="en-US-Standard-D",
+        ssml_gender=texttospeech.SsmlVoiceGender.MALE,
     )
 
     audio_config = texttospeech.AudioConfig(

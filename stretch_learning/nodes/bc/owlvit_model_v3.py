@@ -10,30 +10,22 @@ from tqdm import tqdm
 import torchvision
 import torch
 import torch.nn as nn
-
-# import torch_optimizer as optim
-
-# from torch import optim
-# import bitsandbytes as bnb
+from torch import optim
 import open_clip
 from torchvision.models import resnet18, convnext_tiny
 import torchmetrics
-import torch.optim as optim
 
-# from utils.common import get_end_eff,get_end_eff_yaw_exts
+# from utils.common import get_end_eff, get_end_eff_yaw_ext
 from sklearn.metrics import balanced_accuracy_score, accuracy_score
 import random
+import bitsandbytes as bnb
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import OwlViTForObjectDetection
-import bitsandbytes as bnb
 
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
-
-base_gripper_yaw = -0.09
-gripper_len = 0.22
+from transformers import OwlViTForObjectDetection
 
 
 class MLPBlock(nn.Module):
@@ -198,16 +190,18 @@ class BC(nn.Module):
         self.model, _, _ = open_clip.create_model_and_transforms(
             "EVA02-B-16", pretrained="merged2b_s8b_b131k"
         )
+        self.model.eval()
         self.object_model = OwlViTForObjectDetection.from_pretrained(
             "google/owlvit-base-patch32"
         )
+        self.object_model.eval()
         self.box_embed = nn.Linear(4, 512)
         # encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8,batch_first= True, activation="gelu")
         # self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=512, nhead=8, batch_first=True, activation="gelu"
+            d_model=512, nhead=8, batch_first=True, activation="gelu", dropout=0
         )
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=6)
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=8)
         patch_height = 16
         patch_width = 16
         patch_dim = 768
@@ -229,9 +223,9 @@ class BC(nn.Module):
 
         # self.fc = MLPAdvanced(512,2,512,4,info_size=14,dropout=0.1)
         self.fc = nn.Sequential(
-            MLPBlock(512, 512, dropout=0.1),
-            MLPBlock(512, 512, dropout=0.1),
-            MLPBlock(512, 512, dropout=0.1),
+            MLPBlock(512, 512, dropout=0),
+            MLPBlock(512, 512, dropout=0),
+            MLPBlock(512, 512, dropout=0),
             nn.Linear(512, 2),
         )
         self.tokenizer = open_clip.get_tokenizer("EVA02-B-16")
@@ -322,13 +316,16 @@ class BC(nn.Module):
             top_boxes_head = self.get_top_k_boxes(
                 outputs_head["pred_boxes"], scores_head, 4
             )
+            print(f"{top_boxes_head=}")
             outputs_wrist = self.object_model(**inputs_wrist)
             logits_wrist = torch.max(outputs_wrist["logits"], dim=-1)
             scores_wrist = torch.sigmoid(logits_wrist.values)
             top_boxes_wrist = self.get_top_k_boxes(
                 outputs_wrist["pred_boxes"], scores_wrist, 4
             )
+            print(f"{top_boxes_wrist=}")
             text_features = self.model.encode_text(ref_text).unsqueeze(1)
+            text_features = torch.zeros_like(text_features)
         img_tokens_wrist = self.to_patch_embedding(wrist_img)
         img_tokens_wrist += self.pos_embedding.to(
             self.device, dtype=img_tokens_wrist.dtype
@@ -376,32 +373,38 @@ class BC(nn.Module):
     ):
         with torch.no_grad():
             outputs_head = self.object_model(**inputs_head)
+            outputs_head["logits"] = torch.zeros_like(outputs_head["logits"])
             logits_head = torch.max(outputs_head["logits"], dim=-1)
             scores_head = torch.sigmoid(logits_head.values)
             top_boxes_head = self.get_top_k_boxes(
                 outputs_head["pred_boxes"], scores_head, 4
             )
             outputs_wrist = self.object_model(**inputs_wrist)
+            outputs_wrist["logits"] = torch.zeros_like(outputs_wrist["logits"])
             logits_wrist = torch.max(outputs_wrist["logits"], dim=-1)
             scores_wrist = torch.sigmoid(logits_wrist.values)
             top_boxes_wrist = self.get_top_k_boxes(
                 outputs_wrist["pred_boxes"], scores_wrist, 4
             )
+
             text_features = self.model.encode_text(ref_text).unsqueeze(1)
+            text_features = torch.zeros_like(text_features)
         img_tokens_wrist = self.to_patch_embedding(wrist_img)
-        img_tokens_wrist += self.pos_embedding.to(
-            self.device, dtype=img_tokens_wrist.dtype
-        )
+        # img_tokens_wrist += self.pos_embedding.to(
+        #     self.device, dtype=img_tokens_wrist.dtype
+        # )
         img_tokens_head = self.to_patch_embedding(head_img)
-        img_tokens_head += self.pos_embedding.to(
-            self.device, dtype=img_tokens_head.dtype
-        )
+        # img_tokens_head += self.pos_embedding.to(
+        #     self.device, dtype=img_tokens_head.dtype
+        # )
         img_tokens = torch.cat((img_tokens_head, img_tokens_wrist), dim=1)
         box_tokens_head = self.box_embed(top_boxes_head)
         box_tokens_wrist = self.box_embed(top_boxes_wrist)
         input_tokens = torch.cat(
             (box_tokens_head, box_tokens_wrist, text_features), dim=1
         )
+        # input_tokens = torch.zeros_like(input_tokens)
+        # img_tokens = torch.zeros_like(img_tokens)
 
         curr_x, curr_y = get_end_eff_yaw_ext(js_data)
 
@@ -620,6 +623,10 @@ def good_yaw_only(joint_states):
 
     yaw = joint_states[:, joint_labels.index("joint_wrist_yaw_pos")]
     return yaw < 1.5
+
+
+base_gripper_yaw = -0.09
+gripper_len = 0.22
 
 
 def get_end_eff_yaw_ext(js):

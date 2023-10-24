@@ -10,30 +10,20 @@ from tqdm import tqdm
 import torchvision
 import torch
 import torch.nn as nn
-
-# import torch_optimizer as optim
-
-# from torch import optim
-# import bitsandbytes as bnb
+from torch import optim
 import open_clip
 from torchvision.models import resnet18, convnext_tiny
 import torchmetrics
-import torch.optim as optim
-
-# from utils.common import get_end_eff,get_end_eff_yaw_exts
 from sklearn.metrics import balanced_accuracy_score, accuracy_score
 import random
+import bitsandbytes as bnb
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import OwlViTForObjectDetection
-import bitsandbytes as bnb
 
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
-
-base_gripper_yaw = -0.09
-gripper_len = 0.22
+from transformers import OwlViTForObjectDetection
 
 
 class MLPBlock(nn.Module):
@@ -179,13 +169,9 @@ class BC(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         # TODO: calculate new weights on our data
-        weights = torch.FloatTensor([0.43317524, 0.0, 3.39238095, 2.52087757])
+        weights = torch.FloatTensor([0.71319697, 1.29543703, 1.21076729])
         self.loss_fn = nn.CrossEntropyLoss(weight=weights)
-        self.goal_loss = nn.SmoothL1Loss(reduction="none")
-        self.goal_weights = torch.tensor([2, 0.5]).to("cpu")
-        self.accuracy = torchmetrics.Accuracy(
-            task="multiclass", num_classes=self.num_classes, top_k=1
-        )
+        self.accuracy = torchmetrics.Accuracy(task="multiclass", num_classes=3, top_k=1)
         self.max_epochs = max_epochs
         self.warmup_epochs = max_epochs // 10
         # metadata
@@ -202,7 +188,9 @@ class BC(nn.Module):
             "google/owlvit-base-patch32"
         )
         self.box_embed = nn.Linear(4, 512)
-        # encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8,batch_first= True, activation="gelu")
+        # encoder_layer = nn.TransformerEncoderLayer(
+        #     d_model=512, nhead=8, batch_first=True, activation="gelu"
+        # )
         # self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=512, nhead=8, batch_first=True, activation="gelu"
@@ -227,12 +215,12 @@ class BC(nn.Module):
         # self.conv_net2 = convnext_tiny(torchvision.models.convnext.ConvNeXt_Tiny_Weights.DEFAULT)
         # self.conv_net2.fc = nn.Identity()
 
-        # self.fc = MLPAdvanced(512,2,512,4,info_size=14,dropout=0.1)
+        # self.fc = MLPAdvanced(512,2,512,6,info_size=14,dropout=0.1)
         self.fc = nn.Sequential(
             MLPBlock(512, 512, dropout=0.1),
             MLPBlock(512, 512, dropout=0.1),
             MLPBlock(512, 512, dropout=0.1),
-            nn.Linear(512, 2),
+            nn.Linear(512, 3),
         )
         self.tokenizer = open_clip.get_tokenizer("EVA02-B-16")
         self.pos_embedding = self.posemb_sincos_2d(
@@ -240,34 +228,13 @@ class BC(nn.Module):
             w=224 // patch_width,
             dim=dim,
         )
-        config = {
-            "input_size": 2,
-            "output_size": num_classes,
-            "hidden_dim": 100,
-            "num_layers": 3,
-            "dropout": 0.5,
-            "norm": nn.LayerNorm,
-            "activation": nn.GELU,
-        }
-        self.fc_last = MLP(**config)
-        # state_dict = torch.load(
-        #     "/share/portal/nlc62/hal-skill-repo/point_and_shoot_debug/ckpts/20230930-205318_2d/epoch=30_success=1.000.pt",
-        #     map_location=torch.device(device),
-        # )
-        # for key in list(state_dict.keys()):
-        #     state_dict[key.replace("fc.", "")] = state_dict.pop(key)
-        # miss_keys, unexpected_keys = self.fc_last.load_state_dict(
-        #     state_dict, strict=False
-        # )
-        # print(miss_keys)
-        # print(unexpected_keys)
+
         # loss/accuracy
         self.optimizer = bnb.optim.AdamW8bit(
             [
                 # {'params': self.conv_net.parameters()},
                 # {'params': self.model.text.parameters()},
                 {"params": self.fc.parameters()},
-                # {'params': self.transformer_encoder.parameters()},
                 {"params": self.transformer_decoder.parameters()},
                 {"params": self.to_patch_embedding.parameters()},
                 {"params": self.box_embed.parameters()},
@@ -304,117 +271,40 @@ class BC(nn.Module):
         pe = torch.cat((x.sin(), x.cos(), y.sin(), y.cos()), dim=1)
         return pe.type(dtype)
 
-    def forward(
-        self,
-        inputs_head,
-        inputs_wrist,
-        wrist_img,
-        head_img,
-        ref_text,
-        js_data,
-        goal_pos,
-        return_loss=True,
-    ):
+    def forward(self, inputs, head_img, ref_text):
         with torch.no_grad():
-            outputs_head = self.object_model(**inputs_head)
-            logits_head = torch.max(outputs_head["logits"], dim=-1)
-            scores_head = torch.sigmoid(logits_head.values)
-            top_boxes_head = self.get_top_k_boxes(
-                outputs_head["pred_boxes"], scores_head, 4
-            )
-            outputs_wrist = self.object_model(**inputs_wrist)
-            logits_wrist = torch.max(outputs_wrist["logits"], dim=-1)
-            scores_wrist = torch.sigmoid(logits_wrist.values)
-            top_boxes_wrist = self.get_top_k_boxes(
-                outputs_wrist["pred_boxes"], scores_wrist, 4
-            )
+            outputs = self.object_model(**inputs)
+            logits = torch.max(outputs["logits"], dim=-1)
+            scores = torch.sigmoid(logits.values)
+            top_boxes = self.get_top_k_boxes(outputs["pred_boxes"], scores, 4)
             text_features = self.model.encode_text(ref_text).unsqueeze(1)
-        img_tokens_wrist = self.to_patch_embedding(wrist_img)
-        img_tokens_wrist += self.pos_embedding.to(
-            self.device, dtype=img_tokens_wrist.dtype
-        )
-        img_tokens_head = self.to_patch_embedding(head_img)
-        img_tokens_head += self.pos_embedding.to(
-            self.device, dtype=img_tokens_head.dtype
-        )
-        img_tokens = torch.cat((img_tokens_head, img_tokens_wrist), dim=1)
+        img_tokens = self.to_patch_embedding(head_img)
+        img_tokens += self.pos_embedding.to(self.device, dtype=img_tokens.dtype)
         # img_tokens = self.transformer_encoder(img_tokens)
-        box_tokens_head = self.box_embed(top_boxes_head)
-        box_tokens_wrist = self.box_embed(top_boxes_wrist)
-        input_tokens = torch.cat(
-            (box_tokens_head, box_tokens_wrist, text_features), dim=1
-        )
+        box_tokens = self.box_embed(top_boxes)
+        input_tokens = torch.cat((box_tokens, text_features), dim=1)
 
-        curr_x, curr_y = get_end_eff_yaw_ext(js_data)
-
-        curr_x = curr_x.to(self.device).unsqueeze(1)
-        curr_y = curr_y.to(self.device).unsqueeze(1)
-        # info = js_data.to(self.device)
-
-        # x = torch.cat((image_features_head, img_features_wrist), dim=1)
         x = self.transformer_decoder(input_tokens, img_tokens)
         x = torch.mean(x, dim=1)
         x = self.fc(x)
-        # gt = torch.cat(((goal_pos[:,0].unsqueeze(1)-curr_x), (goal_pos[:,1].unsqueeze(1)-curr_y)), dim=1)
+        return x
 
-        if return_loss:
-            loss_goal = self.goal_loss(x, goal_pos)
-            loss_goal = loss_goal * self.goal_weights
-            loss_goal = torch.mean(loss_goal)
-        # g_x,g_y = x[:,0].unsqueeze(1),x[:,1].unsqueeze(1)
-
-        # inp_x = torch.cat((curr_x,curr_y,(g_x-curr_x),(g_y-curr_y)), dim=1).float()
-        # inp_x = torch.cat(((g_x-curr_x),(g_y-curr_y)), dim=1).float()
-        x = self.fc_last(x)
-        if return_loss:
-            return x, loss_goal
-        else:
-            return x  # torch.cat((g_x,g_y),dim=1)
-
-    def forward_special(
-        self, inputs_head, inputs_wrist, wrist_img, head_img, ref_text, js_data
-    ):
+    def forward_special(self, inputs, head_img, ref_text):
         with torch.no_grad():
-            outputs_head = self.object_model(**inputs_head)
-            logits_head = torch.max(outputs_head["logits"], dim=-1)
-            scores_head = torch.sigmoid(logits_head.values)
-            top_boxes_head = self.get_top_k_boxes(
-                outputs_head["pred_boxes"], scores_head, 4
-            )
-            outputs_wrist = self.object_model(**inputs_wrist)
-            logits_wrist = torch.max(outputs_wrist["logits"], dim=-1)
-            scores_wrist = torch.sigmoid(logits_wrist.values)
-            top_boxes_wrist = self.get_top_k_boxes(
-                outputs_wrist["pred_boxes"], scores_wrist, 4
-            )
+            outputs = self.object_model(**inputs)
+            logits = torch.max(outputs["logits"], dim=-1)
+            scores = torch.sigmoid(logits.values)
+            top_boxes = self.get_top_k_boxes(outputs["pred_boxes"], scores, 4)
             text_features = self.model.encode_text(ref_text).unsqueeze(1)
-        img_tokens_wrist = self.to_patch_embedding(wrist_img)
-        img_tokens_wrist += self.pos_embedding.to(
-            self.device, dtype=img_tokens_wrist.dtype
-        )
-        img_tokens_head = self.to_patch_embedding(head_img)
-        img_tokens_head += self.pos_embedding.to(
-            self.device, dtype=img_tokens_head.dtype
-        )
-        img_tokens = torch.cat((img_tokens_head, img_tokens_wrist), dim=1)
-        box_tokens_head = self.box_embed(top_boxes_head)
-        box_tokens_wrist = self.box_embed(top_boxes_wrist)
-        input_tokens = torch.cat(
-            (box_tokens_head, box_tokens_wrist, text_features), dim=1
-        )
-
-        curr_x, curr_y = get_end_eff_yaw_ext(js_data)
-
-        curr_x = curr_x.to(self.device).unsqueeze(1)
-        curr_y = curr_y.to(self.device).unsqueeze(1)
-        info = js_data.to(self.device)
+        img_tokens = self.to_patch_embedding(head_img)
+        img_tokens += self.pos_embedding.to(self.device, dtype=img_tokens.dtype)
+        box_tokens = self.box_embed(top_boxes)
+        input_tokens = torch.cat((box_tokens, text_features), dim=1)
 
         x = self.transformer_decoder(input_tokens, img_tokens)
         x = torch.mean(x, dim=1)
         x = self.fc(x)
-        g_x, g_y = x[:, 0].unsqueeze(1), x[:, 1].unsqueeze(1)
-        x = self.fc_last(x)
-        return x, torch.cat((g_x, g_y), dim=1)
+        return x
 
     def train_loop(self, train_dataloader, epoch, ctx, scaler):
         losses, losses_ce, accuracy = [], [], []
@@ -427,46 +317,23 @@ class BC(nn.Module):
             leave=False,
         ):
             self.batch_to_device(batch, self.device)
-            (
-                inputs_head,
-                inputs_wrist,
-                wrist_img,
-                head_img,
-                ref_text,
-                joint_state,
-                goal_pos,
-                key_pressed,
-            ) = batch.values()
+            inputs, head_img, ref_text_tokenized, goal_direction = batch.values()
             # idx = good_yaw_only(joint_state)
             # wrist_img, head_img, joint_state, ref_text_tokenized, goal_pos, key_pressed = wrist_img[idx], head_img[idx], joint_state[idx], ref_text_tokenized[idx],  goal_pos[idx], key_pressed[idx]
-            if joint_state.size == 0:
-                print("Unlikely event of all bad yaw")
-                continue
             with ctx:
-                predicted_action, loss = self(
-                    inputs_head,
-                    inputs_wrist,
-                    wrist_img,
-                    head_img,
-                    ref_text,
-                    joint_state,
-                    goal_pos,
-                )
-                actual_action = key_pressed.to(torch.int64).squeeze()
-                # loss_goal = self.goal_loss(predicted_delta, gt)
-                loss_action = self.loss_fn(predicted_action, actual_action)
+                predicted_direction = self(inputs, head_img, ref_text_tokenized)
+                loss_direction = self.loss_fn(predicted_direction, goal_direction)
             # loss += loss_action
             self.optimizer.zero_grad()
-            scaler.scale(loss).backward()
+            scaler.scale(loss_direction).backward()
             # loss.backward()
             nn.utils.clip_grad_norm_(self.parameters(), 3.0)
             scaler.step(self.optimizer)
             # self.optimizer.step()
             scaler.update()
 
-            losses.append(loss.mean().item())
-            losses_ce.append(loss_action.mean().item())
-            acc = self.accuracy(predicted_action, actual_action)
+            losses.append(loss_direction.mean().item())
+            acc = self.accuracy(predicted_direction, goal_direction)
             accuracy.append(acc.mean().item())
         lr = adjust_learning_rate(
             self.optimizer,
@@ -477,8 +344,7 @@ class BC(nn.Module):
             self.warmup_epochs,
         )
         log_dict = {
-            "avg_train_goal_loss": np.mean(losses),
-            "avg_train_action_loss": np.mean(losses_ce),
+            "avg_ce_loss": np.mean(losses),
             "avg_train_acc": np.mean(accuracy),
             "lr": lr,
         }
@@ -497,43 +363,16 @@ class BC(nn.Module):
             leave=False,
         ):
             self.batch_to_device(batch, self.device)
-            (
-                inputs_head,
-                inputs_wrist,
-                wrist_img,
-                head_img,
-                ref_text,
-                joint_state,
-                goal_pos,
-                key_pressed,
-            ) = batch.values()
-            # idx = good_yaw_only(joint_state)
-            # wrist_img, head_img, joint_state, ref_text_tokenized, goal_pos, key_pressed = wrist_img[idx], head_img[idx], joint_state[idx], ref_text_tokenized[idx], goal_pos[idx], key_pressed[idx]
-            if joint_state.size == 0:
-                print("Unlikely event of all bad yaw")
-                continue
-            # predicted_action = self(wrist_img, joint_state, image2=head_img)
+            inputs, head_img, ref_text_tokenized, goal_direction = batch.values()
+
             with ctx:
-                predicted_action, loss = self(
-                    inputs_head,
-                    inputs_wrist,
-                    wrist_img,
-                    head_img,
-                    ref_text,
-                    joint_state,
-                    goal_pos,
-                )
-                actual_action = key_pressed.to(torch.int64).squeeze()
-                # loss_goal = self.goal_loss(predicted_delta, gt)
-                loss_action = self.loss_fn(predicted_action, actual_action)
-            # loss += loss_action
-            losses.append(loss.mean().item())
-            losses_ce.append(loss_action.mean().item())
-            acc = self.accuracy(predicted_action, actual_action)
+                predicted_direction = self(inputs, head_img, ref_text_tokenized)
+                loss_direction = self.loss_fn(predicted_direction, goal_direction)
+            losses.append(loss_direction.mean().item())
+            acc = self.accuracy(predicted_direction, goal_direction)
             accuracy.append(acc.mean().item())
         log_dict = {
-            "avg_val_goal_loss": np.mean(losses),
-            "avg_val_action_loss": np.mean(losses_ce),
+            "avg_val_ce_loss": np.mean(losses),
             "avg_val_acc": np.mean(accuracy),
         }
         return log_dict
@@ -552,28 +391,12 @@ class BC(nn.Module):
             leave=False,
         ):
             self.batch_to_device(batch, self.device)
-            (
-                wrist_img,
-                head_img,
-                ref_text_tokenized,
-                joint_state,
-                goal_pos,
-                key_pressed,
-            ) = batch.values()
-            # idx = good_yaw_only(joint_state)
-            # wrist_img, head_img, joint_state, ref_text_tokenized, goal_pos, key_pressed = wrist_img[idx], head_img[idx], joint_state[idx], ref_text_tokenized[idx], goal_pos[idx], key_pressed[idx]
-            if joint_state.size == 0:
-                print("Unlikely event of all bad yaw")
-                continue
-            # predicted_action = self(wrist_img, joint_state, image2=head_img)
+            inputs, head_img, ref_text_tokenized, goal_direction = batch.values()
             with ctx:
-                predicted_action, _ = self(
-                    wrist_img, head_img, ref_text_tokenized, joint_state, goal_pos
-                )
-                predicted_action = torch.argmax(predicted_action, dim=1)
-                actual_action = key_pressed.to(torch.int64).squeeze()
-            preds.extend(list(predicted_action.cpu()))
-            actual.extend(list(actual_action.cpu()))
+                predicted_direction = self(inputs, head_img, ref_text_tokenized)
+                predicted_direction = torch.argmax(predicted_direction, dim=1)
+            preds.extend(list(predicted_direction.cpu()))
+            actual.extend(list(goal_direction.cpu()))
 
         log_dict = {
             "Accuracy Val": accuracy_score(actual, preds),
@@ -587,7 +410,7 @@ class BC(nn.Module):
             distribution[key] = distribution[key] / total_kp
         print(distribution)
 
-        num_classes = 4
+        num_classes = 3
 
         # Calculate per-class accuracy
         class_correct = list(0.0 for i in range(num_classes))
