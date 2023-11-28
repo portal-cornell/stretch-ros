@@ -14,23 +14,27 @@ from geometry_msgs.msg import Quaternion
 # tf includes a handy set of transformations to move between Euler angles and quaternions (and back).
 from tf import transformations
 
+
 class StretchNavigation:
     """
     A simple encapsulation of the navigation stack for a Stretch robot.
     """
+
     def __init__(self):
         """
         Create an instance of the simple navigation interface.
         :param self: The self reference.
         """
         # Make an action client, and wait for the server.
-        self.client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
+        self.client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
         self.client.wait_for_server()
-        rospy.loginfo('{0}: Made contact with move_base server'.format(self.__class__.__name__))
+        rospy.loginfo(
+            "{0}: Made contact with move_base server".format(self.__class__.__name__)
+        )
 
         # Create a MoveBaseGoal message type, and fill in all of the relevant fields.
         self.goal = MoveBaseGoal()
-        self.goal.target_pose.header.frame_id = 'map'
+        self.goal.target_pose.header.frame_id = "map"
         self.goal.target_pose.header.stamp = rospy.Time()
 
         # Set a position in the coordinate frame
@@ -44,7 +48,7 @@ class StretchNavigation:
         self.goal.target_pose.pose.orientation.z = 0.0
         self.goal.target_pose.pose.orientation.w = 1.0
 
-    def get_quaternion(self,theta):
+    def get_quaternion(self, theta):
         """
         A function to build Quaternians from Euler angles. Since the Stretch only
         rotates around z, we can zero out the other angles.
@@ -60,10 +64,14 @@ class StretchNavigation:
         :param y: y coordinate in the map frame.
         :param theta: heading (angle with the x-axis in the map frame)
         """
+        print("heading there")
         x, y, theta = target_location
 
-        rospy.loginfo('{0}: Heading for ({1}, {2}) at {3} radians'.format(self.__class__.__name__,
-        x, y, theta))
+        rospy.loginfo(
+            "{0}: Heading for ({1}, {2}) at {3} radians".format(
+                self.__class__.__name__, x, y, theta
+            )
+        )
 
         # Set the x and y positions
         self.goal.target_pose.pose.position.x = x

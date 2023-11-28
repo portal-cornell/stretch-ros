@@ -31,7 +31,7 @@ import open_clip
 import copy
 from ppo import MLP
 import sys
-
+from std_srvs.srv import Trigger
 import hal_controller_full_train
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3 import PPO
@@ -213,7 +213,7 @@ class HalSkills(hm.HelloNode):
         self.goal_pos = list(map(float, goal_pos))
         self.goal_tensor = torch.Tensor(self.goal_pos).to(device)
 
-        pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy.pth"
+        pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_fixed_reduced.pth"
         self.model_ppo = load_ppo_model(pth_path)
         self.model_ppo.eval()
 
@@ -345,33 +345,36 @@ class HalSkills(hm.HelloNode):
         except CvBridgeError as error:
             print(error)
 
-    def project_point(self, angle, test_point):
-        # Unit vector coordinates
-        unit_vector = (math.cos(angle), math.sin(angle))
+    def convert_coordinates(self, point, angle):
+        # Create the rotation matrix using the angle
+        rotation_matrix = np.array(
+            [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
+        )
 
-        # Dot product of the test point and unit vector
-        dot_product = test_point[0] * unit_vector[0] + test_point[1] * unit_vector[1]
-
-        # Projected point coordinates
-        projected_point = (dot_product * unit_vector[0], dot_product * unit_vector[1])
-
-        if np.sign(projected_point[0]) == 0 or np.sign(projected_point[0]) == np.sign(
-            unit_vector[0]
-        ):
+        # Convert the point to the new coordinate system
+        new_point = np.dot(rotation_matrix, point)
+        print(f"New point: {new_point}")
+        if np.sign(new_point[0]) >= 0:
             return True
         else:
             return False
 
     def is_point_in_half_circle(self, rotation_angle, center, radius, test_point):
-        center_offset = 0
-        unit_vector = np.array([math.cos(rotation_angle), math.sin(rotation_angle)])
-        center += center_offset * unit_vector
+        center_offset = 0.03
+        rotated_angle = np.copy(rotation_angle)
+        rotated_angle += np.pi / 2
+        unit_vector = np.array([math.cos(rotated_angle), math.sin(rotated_angle)])
+        center_copy = np.copy(center)
+        center_copy += center_offset * unit_vector
 
         # Translate the test point coordinates relative to the center of the circle
-        translated_point = [test_point[0] - center[0], test_point[1] - center[1]]
+        translated_point = [
+            test_point[0] - center_copy[0],
+            test_point[1] - center_copy[1],
+        ]
 
         # Calculate the projection of the translated point onto a vector defined by the rotation angle
-        projection = self.project_point(rotation_angle, translated_point)
+        projection = self.convert_coordinates(translated_point, rotated_angle)
 
         if projection and np.linalg.norm(translated_point) <= radius:
             return True
@@ -675,7 +678,7 @@ class HalSkills(hm.HelloNode):
         self.joint_lift_index = self.joint_states.name.index("joint_lift")
         pose = {
             "wrist_extension": 0.01,
-            "joint_lift": self.pick_starting_height - 0.75,  # for cabinet -0.175
+            "joint_lift": self.pick_starting_height - 0.45,  # for cabinet -0.175
             "joint_wrist_pitch": 0.2,
             "joint_wrist_yaw": -0.09,
         }
@@ -877,6 +880,11 @@ class HalSkills(hm.HelloNode):
         # self.node_name = rospy.get_name()
         # rospy.loginfo("{0} started".format(self.node_name))
         print("start of main")
+
+        s = rospy.ServiceProxy("/switch_to_position_mode", Trigger)
+        resp = s()
+        print(resp)
+
         self.joint_states_subscriber = rospy.Subscriber(
             "/stretch/joint_states", JointState, self.joint_states_callback
         )
@@ -991,9 +999,10 @@ class HalSkills(hm.HelloNode):
         while step < 300:
             print(f"{step = }")
             if (
-                self.joint_states is not None
-                and self.wrist_image is not None
-                and self.head_image is not None
+                self.joint_states
+                is not None
+                # and self.wrist_image is not None
+                # and self.head_image is not None
             ):
                 print("get here")
                 # check delta to determine skill termination
@@ -1055,29 +1064,28 @@ class HalSkills(hm.HelloNode):
                 # elif key == ord("p"):
                 #     mode = False
                 #     print("pepper")
-                if mode:
-                    text = ["salt"]
-                    ref_text_tokenized = tokenizer(text)
+                # if mode:
+                #     text = ["salt"]
+                #     ref_text_tokenized = tokenizer(text)
 
-                else:
-                    text = ["pepper"]
-                    ref_text_tokenized = tokenizer(text)
-                print(33333333333)
-                self.raw_head_image = np.zeros_like(self.raw_head_image)
-                self.head_image = torch.zeros_like(self.head_image)
-                inputs_head = processor(
-                    text=text,
-                    images=Im.fromarray(self.raw_head_image),
-                    return_tensors="pt",
-                ).to("cpu")
+                # else:
+                #     text = ["pepper"]
+                #     ref_text_tokenized = tokenizer(text)
+                # self.raw_head_image = np.zeros_like(self.raw_head_image)
+                # self.head_image = torch.zeros_like(self.head_image)
+                # inputs_head = processor(
+                #     text=text,
+                #     images=Im.fromarray(self.raw_head_image),
+                #     return_tensors="pt",
+                # ).to("cpu")
 
-                self.raw_wrist_image = np.zeros_like(self.raw_wrist_image)
-                self.wrist_image = torch.zeros_like(self.wrist_image)
-                inputs_wrist = processor(
-                    text=text,
-                    images=Im.fromarray(self.raw_wrist_image),
-                    return_tensors="pt",
-                ).to("cpu")
+                # self.raw_wrist_image = np.zeros_like(self.raw_wrist_image)
+                # self.wrist_image = torch.zeros_like(self.wrist_image)
+                # inputs_wrist = processor(
+                #     text=text,
+                #     images=Im.fromarray(self.raw_wrist_image),
+                #     return_tensors="pt",
+                # ).to("cpu")
 
                 start = time.time()
                 # if prev_inputs_wrist:
@@ -1126,11 +1134,11 @@ class HalSkills(hm.HelloNode):
 
                 goal_pos_tensor = torch.Tensor(self.end_eff_to_xyz(self.goal_tensor))
                 print(f"{goal_pos_tensor=}")
-                noise = torch.randn_like(goal_pos_tensor) * 0.005
+                # noise = torch.randn_like(goal_pos_tensor) * 0.005
                 # noise = torch.rand_like(goal_pos_tensor) / 40
-                print(f"{noise=}")
-                sign = 1 if np.random.random() < 0.5 else -1
-                goal_pos_tensor += sign * noise
+                # print(f"{noise=}")
+                # sign = 1 if np.random.random() < 0.5 else -1
+                # goal_pos_tensor += sign * noise
 
                 goal_tensors.append(goal_pos_tensor)
                 end_eff_tensors.append(end_eff_tensor)
@@ -1153,7 +1161,7 @@ class HalSkills(hm.HelloNode):
                 # print(joint_pos[yaw_idx])
                 in_z = np.abs(goal_pos_tensor[2] - end_eff_tensor[2]) < 0.025
                 in_circle = (
-                    np.linalg.norm(goal_pos_tensor[:2] - end_eff_tensor[:2]) < 0.015
+                    np.linalg.norm(goal_pos_tensor[:2] - end_eff_tensor[:2]) < 0.005
                 )
                 in_half_circle = self.is_point_in_half_circle(
                     joint_pos[yaw_idx], goal_pos_tensor[:2], 0.02, end_eff_tensor[:2]
@@ -1560,9 +1568,6 @@ class HalSkills(hm.HelloNode):
         )
         handles, _ = sim_scatter.legend_elements()
 
-        # filtered_kp_mapping = [sim_kp_mapping[i] for i in np.unique(sim_actions)]
-        # plt.legend(handles, filtered_kp_mapping, title="Key Presses")
-
         # Plot the start
         plt.plot(
             [plot_x[0]],
@@ -1612,9 +1617,6 @@ class HalSkills(hm.HelloNode):
         )
         handles2, _ = sim_scatter.legend_elements()
 
-        # filtered_kp_mapping = [sim_kp_mapping[i] for i in np.unique(sim_actions)]
-        # plt.legend(handles, filtered_kp_mapping, title="Key Presses")
-
         # Plot the start
         plt.plot(
             [plot_x[0]],
@@ -1652,66 +1654,12 @@ class HalSkills(hm.HelloNode):
         ax.set_ylim(0, 0.5)
         ax.set_zlim(0, 0.2)
 
-        # self.plot_traj_no_save(
-        #     kp_mapping, pts, onpolicy_kp, [0, 0, 0], s=5, alpha=1, title=title
-        # )
-        # self.plot_traj_no_save(
-        #     sim_kp_mapping,
-        #     sim_states,
-        #     sim_actions,
-        #     [0, 0, 0],
-        #     s=2,
-        #     alpha=0.3,
-        #     title=title,
-        # )
-
-        # pts = np.array(pts)
-        # labels = np.array(labels)
-        # print(f"shape: {pts.shape}")
-
-        # x_min, x_max = pts[:, 0].min(), pts[:, 0].max()
-        # y_min, y_max = pts[:, 1].min(), pts[:, 1].max()
-
-        # scatter = plt.scatter(
-        #     pts[:, 0], pts[:, 1], c=labels, cmap="viridis", s=5, alpha=1
-        # )
-        # plt.plot([0], [0], marker="*", markersize=10, color="red")
-        # plt.plot(pts[0, 0], pts[0, 1], marker="o", markersize=8, color="green")
-        # handles, _ = scatter.legend_elements()
-        # plt.legend(handles, [kp_mapping[i] for i in np.unique(labels)], title="Classes")
-
-        # plt.xlabel("Relative x")
-        # plt.ylabel("Relative y")
-        # x_lim = [x_min - 0.5, x_max + 0.5]
-        # y_lim = [-(y_max + 0.5), -(y_min - 0.5)]
-        # plt.xlim(x_lim[0], x_lim[1])
-        # plt.ylim(y_lim[0], y_lim[1])
-        # # plt.xlim(-0.6,0.8)
-        # # plt.ylim(-0.4,0.8)
-        # plt.title(title)
-
-        # # plotting sim
-
-        # scatter = plt.scatter(
-        #     sim_x[:-1], sim_y[:-1], c=onpolicy_kp, cmap="viridis", s=2, alpha=0.3
-        # )
-
-        # handles2, _ = scatter.legend_elements()
         plt.legend(
             handles2 + handles,
             [kp_mapping[i] for i in np.unique(onpolicy_kp)]
             + [sim_kp_mapping[i] for i in np.unique(sim_actions)],
             title="Classes",
         )
-
-        # plotting decision boundary
-        # print(f'x_lims: {x_lim}')
-        # print(f'y_lims: {y_lim}')
-        # dec_bound_pts, dec_bound_kps = self.get_decision_boundary_points([x_min-0.45, -(y_max + 0.45)], [x_max+0.45, -(y_min - 0.45)], [0.005, 0.005])
-        # print(f'decisionn_boundary x_lims: {np.min(dec_bound_pts[:, 0])}, {np.max(dec_bound_pts[:, 0])}')
-        # print(f'decisionn_boundary y_lims: {np.min(dec_bound_pts[:, 1])}, {np.max(dec_bound_pts[:, 1])}')
-
-        # scatter = plt.scatter(dec_bound_pts[:, 0], dec_bound_pts[:, 1], c=dec_bound_kps, cmap="viridis", s=5, alpha=0.01)
 
         save_dir = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/nodes/plots/base_ppo"
         save_path = Path(save_dir, f"{title.replace(' ', '_')}.png")

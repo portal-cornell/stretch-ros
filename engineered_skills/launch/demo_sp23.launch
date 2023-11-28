@@ -5,17 +5,19 @@
   <arg name="model_type"  default="visuomotor_bc" />
   <arg name="train_type"  default="end-eff-img" />
   <arg name="debug_directory" value="$(env HELLO_FLEET_PATH)/debug/"/>
+  <arg name="calibrated_controller_yaml_file" value="$(find stretch_core)/config/controller_calibration_head.yaml"/>
   <!-- STRETCH DRIVER -->
-  <param name="/stretch_driver/broadcast_odom_tf" type="bool" value="false"/>
+  <param name="robot_description" textfile="$(find stretch_description)/urdf/stretch.urdf" />
+  <param name="/stretch_driver/broadcast_odom_tf" type="bool" value="true"/> 
   <param name="/stretch_driver/mode" type="string" value="navigation" />
   <param name="/stretch_driver/fail_out_of_range_goal" type="bool" value="false"/>
   <include file="$(find stretch_core)/launch/stretch_driver.launch" pass_all_args="true"/>
   <!-- REALSENSE D435i -->
-  <include file="$(find stretch_core)/launch/d435i_high_resolution.launch"></include>
-  <node name="d435i_configure" pkg="stretch_core" type="d435i_configure" output="screen">
+  <!-- <include file="$(find stretch_core)/launch/d435i_high_resolution.launch"></include>
+  <node name="d435i_configure" pkg="stretch_core" type="d435i_configure" output="screen"> -->
     <!--<param name="initial_mode" type="string" value="Default"/>-->
-    <param name="initial_mode" type="string" value="High Accuracy"/>
-  </node>
+    <!-- <param name="initial_mode" type="string" value="High Accuracy"/>
+  </node> -->
   <!-- -->
   <!-- CENTERED BASE LINK -->
   <node name="centered_base_link_tf_publisher" pkg="tf" type="static_transform_publisher" args="-0.1 0 0 0 0 0 1 /base_link /centered_base_link 100" />

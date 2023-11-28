@@ -6,22 +6,22 @@ import matplotlib.pyplot as plt
 import ppo
 import sys
 
-config = {
-    "input_size": 3,
-    "output_size": 6,
-    "hidden_dim": 64,
-    # "hidden_dim": 100,
-    "num_layers": 4,
-    "activation": nn.Tanh,
-}
-
 # config = {
 #     "input_size": 3,
-#     "output_size": 10,
-#     "hidden_dim": 100,
+#     "output_size": 6,
+#     "hidden_dim": 64,
+#     # "hidden_dim": 100,
 #     "num_layers": 4,
-#     "activation": nn.ReLU,
+#     "activation": nn.Tanh,
 # }
+
+config = {
+    "input_size": 3,
+    "output_size": 10,
+    "hidden_dim": 256,
+    "num_layers": 4,  # 4 for small 5 for big
+    "activation": nn.Tanh,
+}
 
 
 def is_valid(js, delta):
@@ -224,6 +224,8 @@ def load_pth_file_to_model(model, path="policy.pth"):
 
     result["model.6.bias"] = state_dict["action_net.bias"]
     result["model.6.weight"] = state_dict["action_net.weight"]
+    # result["model.8.bias"] = state_dict["action_net.bias"]  # use 8 when model is big
+    # result["model.8.weight"] = state_dict["action_net.weight"]
 
     # model = MLP(**config)
 
@@ -266,11 +268,11 @@ def end_eff_to_xyz(joint_state):
     return [x.item(), y.item(), z.item()]
 
 
-model = ppo.MLP(**config)
-model = load_pth_file_to_model(
-    model,
-    "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy.pth",
-)
+# model = ppo.MLP(**config)
+# model = load_pth_file_to_model(
+#     model,
+#     "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy.pth",
+# )
 
 
 def main():
