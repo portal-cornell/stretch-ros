@@ -1,0 +1,7 @@
+<launch>
+
+  <!-- OPEN DRAWER BC -->
+  <node name="open_drawer" pkg="stretch_learning" type="open_drawer" output="screen" args=''/>
+  <!-- -->
+
+</launch>

@@ -1,0 +1,44 @@
+<launch>
+  <node name="d435i_accel_correction" pkg="stretch_core" type="d435i_accel_correction" output="screen" />
+  <!-- REALSENSE D435i -->
+  <include file="$(find realsense2_camera)/launch/rs_multiple_devices.launch">
+    <arg name="serial_no_camera1" value="040322072546"/> <!-- Replace with actual serial number -->
+    <!-- <arg name="serial_no_camera2" value="233522073925"/> Replace with actual serial number -->
+    <arg name="camera1" value="head_camera"/>    <!-- Replace with camera name -->
+    <!-- <arg name="camera2" value="wrist_camera"/>     Replace with camera name  -->
+    <arg name="tf_prefix_camera1" value="camera"/>
+    <!-- <arg name="tf_prefix_camera2" value="camera2"/> -->
+
+    <arg name="accel_fps_camera1" value="63"/>
+    <arg name="gyro_fps_camera1" value="200"/>
+    <arg name="depth_fps_camera1" value="15"/>
+    <arg name="enable_infra1_camera1" value="false"/>
+    <arg name="enable_infra2_camera1" value="false"/>
+    <arg name="enable_accel_camera1" value="true"/>
+    <arg name="depth_width_camera1" value="-1"/>
+    <arg name="depth_height_camera1" value="-1"/>
+    <arg name="color_width_camera1" value="-1"/>
+    <arg name="color_height_camera1" value="-1"/>
+    <!-- <arg name="depth_width" value="1280"/>
+    <arg name="depth_height" value="720"/>
+    <arg name="color_width" value="1280"/>
+    <arg name="color_height" value="720"/> -->
+    <arg name="color_fps_camera1" value="15"/>
+    <arg name="align_depth_camera1" value="true"/>
+    <arg name="filters_camera1" value="pointcloud"/>
+
+    <!-- <arg name="accel_fps_camera2" value="63"/>
+    <arg name="gyro_fps_camera2" value="200"/>
+    <arg name="depth_fps_camera2" value="15"/>
+    <arg name="enable_infra1_camera2" value="false"/>
+    <arg name="enable_infra2_camera2" value="false"/>
+    <arg name="enable_accel_camera2" value="true"/>
+    <arg name="depth_width_camera2" value="-1"/>
+    <arg name="depth_height_camera2" value="-1"/>
+    <arg name="color_width_camera2" value="-1"/>
+    <arg name="color_height_camera2" value="-1"/>
+    <arg name="color_fps_camera2" value="15"/>
+    <arg name="align_depth_camera2" value="true"/>
+    <arg name="filters_camera2" value="pointcloud"/> -->
+  </include>
+</launch>

@@ -1,0 +1,5 @@
+#request constants
+string object
+---
+#response constants
+int8 status
