@@ -22,10 +22,11 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # pantry_ketchup = (2.72585, 0.90955, math.pi / 2)
 # pantry = pantry_mustard
 # pantry = (2.83585, 1.08955, math.pi / 2)  # actual pantry pos
-pantry = (2.83585, 1.03955, math.pi / 2)
+PANTRY_LOC = (2.83585, 1.03955, math.pi / 2)
 # pantry = (2.00585, 0.96955, math.pi / 2)# experimentation
-table = (1.55, 2.01, math.pi)
-home = (0.1, 0, 0)
+BETWEEN_TABLE_PANTRY_LOC = (1.55, 0, 0)
+TABLE_LOC = (1.55, 2.01, math.pi)
+HOME_LOC = (0.1, 0, 0)
 
 TABLE_HEIGHT = 0.98  # arbitrary table height
 TABLE_WRIST_EXT = 0.35
@@ -53,6 +54,7 @@ class Hal(hm.HelloNode):
 
         self.nav = StretchNavigation()
         self.rate = 10.0
+        self.current_location = HOME_LOC
 
         self.action_status = NOT_STARTED
         self.pick_prompt = None
@@ -63,6 +65,23 @@ class Hal(hm.HelloNode):
         """
 
         self.hal_skills.main(reset=reset, prompt=prompt)
+
+    def spin_towards_goal(self, goal_loc):
+        """
+        spin robot so that it is in the direction of the goal
+        """
+        curr_x, curr_y, _ = self.current_location
+        goal_x, goal_y, _ = goal_loc
+        centerred_x, centerred_y = goal_x - curr_x, goal_y - curr_y
+        new_orientation = math.atan2(centerred_y, centerred_x)
+        print(f"Spinning towards {new_orientation}")
+        self.nav.go_to((curr_x, curr_y, new_orientation), self.orient_callback)
+
+    def orient_callback(self, status, result):
+        self.action_status = SUCCESS
+
+    def move_between_table_pantry_callback(self, status, result):
+        self.current_location = BETWEEN_TABLE_PANTRY_LOC
 
     def move_pantry(self):
         """
@@ -76,8 +95,18 @@ class Hal(hm.HelloNode):
             "/move_base/TrajectoryPlannerROS/yaw_goal_tolerance", 0.20
         )  # 10 degrees
         print(resp)
-        # if req.pick_prompt == "ketchup":
-        self.nav.go_to(pantry, self.move_pantry_callback)  # go roughly to the pantry
+
+        # intermediary point if going to pantry from table
+        if self.current_location == TABLE_LOC:
+            self.spin_towards_goal(goal_loc=BETWEEN_TABLE_PANTRY_LOC)
+            self.nav.go_to(
+                BETWEEN_TABLE_PANTRY_LOC, self.move_between_table_pantry_callback
+            )
+
+        self.spin_towards_goal(goal_loc=PANTRY_LOC)
+        self.nav.go_to(
+            PANTRY_LOC, self.move_pantry_callback
+        )  # go roughly to the pantry
 
         # calibrate angles
         rospy.set_param("/move_base/TrajectoryPlannerROS/xy_goal_tolerance", 0.05)
@@ -90,7 +119,7 @@ class Hal(hm.HelloNode):
         rospy.set_param(
             "/move_base/TrajectoryPlannerROS/acc_lim_theta", 0.2
         )  # 10 degrees
-        self.nav.go_to(pantry, self.angle_calib_callback)
+        self.nav.go_to(PANTRY_LOC, self.angle_calib_callback)
 
         # resetting params
         rospy.set_param(
@@ -110,6 +139,7 @@ class Hal(hm.HelloNode):
 
     def move_pantry_callback(self, status, result):
         print("at pantry")
+        self.current_location = PANTRY_LOC
         # self.action_status = SUCCESS
 
     def move_table(self):
@@ -125,10 +155,12 @@ class Hal(hm.HelloNode):
         s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
         resp = s()
         print(resp)
-        self.nav.go_to(table, self.move_table_callback)  # go roughly to the table
+        self.spin_towards_goal(goal_loc=TABLE_LOC)
+        self.nav.go_to(TABLE_LOC, self.move_table_callback)  # go roughly to the table
 
     def move_table_callback(self, status, result):
         print("at table")
+        self.current_location = TABLE_LOC
         self.action_status = SUCCESS
 
     def move_home(self):
@@ -139,12 +171,13 @@ class Hal(hm.HelloNode):
         s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
         resp = s()
         print(resp)
-
-        self.nav.go_to(home, self.move_home_callback)  # go roughly to the table
+        self.spin_towards_goal(goal_loc=HOME_LOC)
+        self.nav.go_to(HOME_LOC, self.move_home_callback)  # go roughly to the table
 
     def move_home_callback(self, status, result):
         print("at home")
         self.action_status = SUCCESS
+        self.current_location = HOME_LOC
 
     def reset_pick_pantry(self):
         print("resetting pick pantry")
@@ -262,7 +295,7 @@ if __name__ == "__main__":
 
     # hal.move_pantry()
     # rospy.sleep(2)
-    hal.pick_goal(reset=False, prompt="kosher salt")
+    # hal.pick_goal(reset=False, prompt="kosher salt")
     # hal.move_table()
     # hal.place_table()
     # exit()

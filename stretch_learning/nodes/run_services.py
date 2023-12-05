@@ -102,8 +102,8 @@ class TaskServer:
 if __name__ == "__main__":
     ts = TaskServer()
     # ts.start()
-    # ts.handle_move(None, "pantry")
-    # ts.handle_pick("dill relish")
+    ts.handle_move(None, "pantry")
+    ts.handle_pick("dill relish")
     ts.handle_move(None, "table")
     ts.handle_place(None)
     ts.handle_move(None, "pantry")
