@@ -6,6 +6,7 @@ from std_srvs.srv import Trigger
 import torch
 import actionlib
 import tf2_ros
+import time
 
 
 from hal_skills_final import HalSkillsNode
@@ -54,7 +55,7 @@ class Hal(hm.HelloNode):
 
         self.nav = StretchNavigation()
         self.rate = 10.0
-        self.current_location = HOME_LOC
+        self.current_location = PANTRY_LOC
 
         self.action_status = NOT_STARTED
         self.pick_prompt = None
@@ -274,6 +275,7 @@ class Hal(hm.HelloNode):
             "wrist_extension": TABLE_WRIST_EXT,
         }
         self.move_to_pose(pose)
+        time.sleep(0.5)
         pose = {
             "joint_lift": TABLE_HEIGHT,  # for cabinet -0.175
         }
