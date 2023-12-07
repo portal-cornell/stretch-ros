@@ -39,6 +39,7 @@ import tf2_py
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
 from tf2_msgs.msg import TFMessage
+from collections import deque
 
 
 def load_ppo_model(pth_path):
@@ -796,6 +797,11 @@ class HalSkillsNode(hm.HelloNode):
 
         return np.array([x.item(), y.item(), z])
 
+    def _find_mode(self, buffer):
+        vals, counts = np.unique(buffer, return_counts=True)
+        index = np.argmax(counts)
+        return vals[index]
+
     def rotate_odom(self, coord, angle, pivot):
         x1 = (
             math.cos(angle) * (coord[0] - pivot[0])
@@ -941,29 +947,34 @@ class HalSkillsNode(hm.HelloNode):
         goal_pred_y = []
         goal_pred_z = []
 
-        top_shelf_preds = 0
-        lower_shelf_preds = 0
+        height_pred_buffers = deque(maxlen=10)
+        lower_shelf_preds, upper_shelf_preds = 0, 0
         fixed_height = None
-        SECOND_SHELF_Z = 0.78
-        TOP_SHELF_Z = 1.0
+        SECOND_SHELF_Z = 0.74
+        TOP_SHELF_Z = 0.98
 
         # listener = tf.TransformListener()
         # from_frame_rel = "centered_base_link"
         # to_frame_rel = "link_grasp_center"
         while step < 500 and not rospy.is_shutdown():
-            while (
-                self.goal_pos_pred is None
-                or self.pick_prompt != prompt
-                and not rospy.is_shutdown()
-            ):
-                # TODO: should be cleaner way of doing this with service
-                self.pick_prompt_publisher.publish(prompt)
+            # while (
+            #     self.goal_pos_pred is None
+            #     or self.pick_prompt != prompt
+            #     and not rospy.is_shutdown()
+            # ):
+            #     # TODO: should be cleaner way of doing this with service
+            self.pick_prompt_publisher.publish(prompt)
             if (
                 self.joint_states is not None
                 and self.goal_pos_pred is not None
                 and self.head_image is not None
                 and self.odometry is not None
             ):
+                step += 1
+                if step <= 15:
+                    # drop first 15 to stabilize
+                    continue
+
                 # continue
                 # fixed goal pred
                 # if fixed_goal is not None and step >= 5:
@@ -971,11 +982,11 @@ class HalSkillsNode(hm.HelloNode):
                 # else:
                 #     fixed_goal = deepcopy(self.goal_pos_pred)
 
-                if len(self.joint_states_data.size()) <= 1:
-                    print(self.joint_states_data)
-                    continue
+                # if len(self.joint_states_data.size()) <= 1:
+                #     print(self.joint_states_data)
+                #     continue
 
-                print("-" * 80)
+                # print("-" * 80)
 
                 try:
                     trans = self.buffer.lookup_transform(
@@ -1000,26 +1011,25 @@ class HalSkillsNode(hm.HelloNode):
                 local_goal_pos[0] = -(local_goal_pos[0] + 0.03)
                 local_goal_pos[1] = -(local_goal_pos[1] + 0.13)  # 0.17
                 local_goal_pos[2] = (
-                    SECOND_SHELF_Z if local_goal_pos[-1].item() < 0.75 else TOP_SHELF_Z
+                    SECOND_SHELF_Z if local_goal_pos[-1].item() < 0.76 else TOP_SHELF_Z
                 )
 
                 # if robot predicts 10 top shelf, go top. else go bottom
-                if lower_shelf_preds < 10 and top_shelf_preds < 10:
-                    if local_goal_pos[2] == SECOND_SHELF_Z:
-                        lower_shelf_preds += 1
-                    elif local_goal_pos[2] == TOP_SHELF_Z:
-                        top_shelf_preds += 1
-                elif lower_shelf_preds == 10:
-                    local_goal_pos[2] = SECOND_SHELF_Z
-                elif top_shelf_preds == 10:
-                    local_goal_pos[2] = TOP_SHELF_Z
+
+                if local_goal_pos[2] == SECOND_SHELF_Z:
+                    height_pred_buffers.append(SECOND_SHELF_Z)
+                elif local_goal_pos[2] == TOP_SHELF_Z:
+                    height_pred_buffers.append(TOP_SHELF_Z)
+                local_goal_pos[2] = self._find_mode(height_pred_buffers)
+                print(height_pred_buffers)
+                print(local_goal_pos[2])
 
                 goal_tensors.append(local_goal_pos)
                 end_eff_tensors.append(end_eff_tensor)
 
-                print(
-                    f"{trans.transform.translation.x}, {trans.transform.translation.y}, {trans.transform.translation.z}"
-                )
+                # print(
+                #     f"{trans.transform.translation.x}, {trans.transform.translation.y}, {trans.transform.translation.z}"
+                # )
 
                 point = PointStamped()
                 point.header.frame_id = "base_link"
@@ -1036,8 +1046,8 @@ class HalSkillsNode(hm.HelloNode):
                 point.point.z = end_eff_tensor[2]
                 self.curr_ee_ps_publisher.publish(point)
                 # print(f"Curr: {point=}")
-                print(f"goal tensor:  {local_goal_pos}")
-                print(f"Current EE pos: {end_eff_tensor}")
+                # print(f"goal tensor:  {local_goal_pos}")
+                # print(f"Current EE pos: {end_eff_tensor}")
                 # continue
 
                 in_z = np.abs(local_goal_pos[2] - end_eff_tensor[2]) < 0.025

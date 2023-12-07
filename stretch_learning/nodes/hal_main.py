@@ -23,14 +23,14 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # pantry_ketchup = (2.72585, 0.90955, math.pi / 2)
 # pantry = pantry_mustard
 # pantry = (2.83585, 1.08955, math.pi / 2)  # actual pantry pos
-PANTRY_LOC = (2.83585, 1.03955, math.pi / 2)
+PANTRY_LOC = [2.80, 1.08, math.pi / 2]
 # pantry = (2.00585, 0.96955, math.pi / 2)# experimentation
-BETWEEN_TABLE_PANTRY_LOC = (1.55, 0, 0)
+BETWEEN_TABLE_PANTRY_LOC = (2.0, 1.2, -math.pi / 4)
 TABLE_LOC = (1.55, 2.01, math.pi)
 HOME_LOC = (0.1, 0, 0)
 
 TABLE_HEIGHT = 0.98  # arbitrary table height
-TABLE_WRIST_EXT = 0.35
+TABLE_WRIST_EXT = 0.38
 # skill status
 RUNNING = -1
 SUCCESS = 1
@@ -55,15 +55,22 @@ class Hal(hm.HelloNode):
 
         self.nav = StretchNavigation()
         self.rate = 10.0
-        self.current_location = PANTRY_LOC
+        self.current_location = HOME_LOC
 
         self.action_status = NOT_STARTED
         self.pick_prompt = None
+
+        self.pantry_moves = 0
 
     def pick_goal(self, prompt, reset=False):
         """
         reset parameter defaults to False: when False, Hal will reset its arm and execute policy assuming it's already in reset position
         """
+        prompt = prompt.lower()
+        if "mustard" in prompt:
+            prompt = "yellow mustard"
+        elif "reslish" in prompt:
+            prompt = "dill relish"
 
         self.hal_skills.main(reset=reset, prompt=prompt)
 
@@ -71,6 +78,8 @@ class Hal(hm.HelloNode):
         """
         spin robot so that it is in the direction of the goal
         """
+        return
+        rospy.set_param("/move_base/TrajectoryPlannerROS/yaw_goal_tolerance", 0.20)
         curr_x, curr_y, _ = self.current_location
         goal_x, goal_y, _ = goal_loc
         centerred_x, centerred_y = goal_x - curr_x, goal_y - curr_y
@@ -141,6 +150,8 @@ class Hal(hm.HelloNode):
     def move_pantry_callback(self, status, result):
         print("at pantry")
         self.current_location = PANTRY_LOC
+        # PANTRY_LOC[1] -= 0.01
+        PANTRY_LOC[2] += 0.06
         # self.action_status = SUCCESS
 
     def move_table(self):
@@ -152,7 +163,7 @@ class Hal(hm.HelloNode):
         # return
         rospy.ServiceProxy("/switch_to_position_mode", Trigger)
         self._lift_arm_primitive()
-        rospy.set_param("/move_base/TrajectoryPlannerROS/xy_goal_tolerance", 0.20)
+        rospy.set_param("/move_base/TrajectoryPlannerROS/xy_goal_tolerance", 0.05)
         s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
         resp = s()
         print(resp)
@@ -192,7 +203,7 @@ class Hal(hm.HelloNode):
         self.joint_lift_index = self.hal_skills.joint_states.name.index("joint_lift")
         pose = {
             "wrist_extension": 0.01,
-            "joint_lift": self.pick_starting_height - 0.35,  # for cabinet -0.175
+            "joint_lift": self.pick_starting_height - 0.55,  # for cabinet -0.175
             "joint_wrist_pitch": 0.2,
             "joint_wrist_yaw": -0.09,
         }
