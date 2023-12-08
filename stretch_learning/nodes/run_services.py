@@ -38,9 +38,11 @@ class TaskServer:
             "home": self.hal.move_home,
             "pantry": self.hal.move_pantry,
             "table": self.hal.move_table,
+            "shelf": self.hal.move_shelf,
         }
         self.place_location_to_function = {
             "table": self.hal.place_table,
+            "shelf": self.hal.place_shelf,
         }
 
     def start(self):
@@ -48,27 +50,24 @@ class TaskServer:
         s_move = rospy.Service("HalMove", HalMove, self.handle_move)
         s_place = rospy.Service("HalPlace", HalPlace, self.handle_place)
         s_pick = rospy.Service("HalPick", HalPick, self.handle_pick)
+        s_handover = rospy.Service("HalHandover", HalHandover, self.handle_handover)
 
         rospy.spin()
 
-    def handle_move(self, req, loc="pantry"):
+    def handle_move(self, req):
         print("Move callback called")
         if self.action_status == NOT_STARTED:
             # return HalMoveResponse(SUCCESS)
             self.action_status = RUNNING
             self.hal.retract_arm_primitive()
-            if loc == "table":
-                if hasattr(req, "location"):
-                    self.move_location_to_function[req.location.lower()]()
-                else:
-                    # self.hal.move_pantry()
-                    self.hal.move_table()
-            elif loc == "pantry":
-                if hasattr(req, "location"):
-                    self.move_location_to_function[req.location.lower()]()
-                else:
-                    self.hal.move_pantry()
-                    # self.hal.move_table()
+            if hasattr(req, "location"):
+                self.move_location_to_function[req.location.lower()]()
+            elif req == "table":
+                self.hal.move_table()
+            elif req == "pantry":
+                self.hal.move_pantry()
+            elif req == "shelf":
+                self.hal.move_shelf()
             self.action_status = NOT_STARTED
             return HalMoveResponse(SUCCESS)
         return HalMoveResponse(self.action_status)
@@ -80,8 +79,11 @@ class TaskServer:
             self.action_status = RUNNING
             if hasattr(req, "location"):
                 self.place_location_to_function[req.location.lower()]()
-            else:
+            elif req == "table":
                 self.hal.place_table()
+            elif req == "shelf":
+                self.hal.place_shelf()
+            self.hal.retract_arm_primitive()
             self.action_status = NOT_STARTED
             return HalPlaceResponse(SUCCESS)
         return HalPlaceResponse(self.action_status)
@@ -103,9 +105,8 @@ class TaskServer:
     def handle_handover(self, _):
         print("Handover callback called")
         if self.action_status == NOT_STARTED:
-            # return HalPickResponse(SUCCESS)
             self.action_status = RUNNING
-            self.hal.place_shelf(None)
+            self.hal.handover(None)
             self.action_status = NOT_STARTED
             return HalHandoverResponse(SUCCESS)
         return HalHandoverResponse(self.action_status)
@@ -115,16 +116,18 @@ if __name__ == "__main__":
     ts = TaskServer()
     # ts.start()
 
-    # ts.handle_move(None, "pantry")
-    # ts.handle_pick("relish")
-    ts.handle_move(None, "table")
-    # ts.handle_place(None)
+    ts.handle_move("pantry")
+    ts.handle_pick("relish")
+    ts.handle_move("table")
+    ts.handle_place("table")
     ts.handle_handover(None)
+    ts.handle_move("shelf")
+    ts.handle_place("shelf")
 
     # ts.handle_handover(None)
     # ts.start()
     # ts.handle_pick("relish")
-    # ts.handle_move(None, "pantry")
+    # ts.handle_move("pantry")
     # ts.handle_pick("mustard")
-    # ts.handle_move(None, "table")
+    # ts.handle_move("table")
     # ts.handle_place(None)

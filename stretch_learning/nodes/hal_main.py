@@ -35,7 +35,7 @@ HOME_LOC = (0.1, 0, 0)
 
 TABLE_HEIGHT = 0.98  # arbitrary table height
 TABLE_WRIST_EXT = 0.4
-SHELF_HEIGHT = 0.82
+SHELF_HEIGHT = 0.80
 # skill status
 RUNNING = -1
 SUCCESS = 1
@@ -300,12 +300,28 @@ class Hal(hm.HelloNode):
         self.retract_arm_primitive()
         self.action_status = SUCCESS
 
+    def move_shelf(self):
+        s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
+        resp = s()
+        self.nav.go_to(SHELF_LOC, self.move_shelf_callback)
+
+    def place_shelf(self):
+        s = rospy.ServiceProxy("/switch_to_position_mode", Trigger)
+        resp = s()
+        pose = {
+            "wrist_extension": TABLE_WRIST_EXT - 0.1,
+            "joint_lift": SHELF_HEIGHT,
+        }
+        self.move_to_pose(pose)
+        rospy.sleep(1.0)
+        self.hal_skills.open_grip()
+
     def move_shelf_callback(self, status, result):
         print("at shelf")
         self.current_location = SHELF_LOC
         self.action_status = SUCCESS
 
-    def place_shelf(self, object):
+    def handover(self, object):
         s = rospy.ServiceProxy("/switch_to_position_mode", Trigger)
         resp = s()
         pose = {
@@ -315,16 +331,6 @@ class Hal(hm.HelloNode):
         self.move_to_pose(pose)
         self.hal_skills.handover(object)
         self.retract_arm_primitive()
-
-        s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
-        resp = s()
-        self.nav.go_to(SHELF_LOC, self.move_shelf_callback)
-        pose = {
-            "wrist_extension": TABLE_WRIST_EXT - 0.1,
-            "joint_lift": SHELF_HEIGHT,
-        }
-        self.move_to_pose(pose)
-        self.hal_skills.open_grip()
 
 
 if __name__ == "__main__":

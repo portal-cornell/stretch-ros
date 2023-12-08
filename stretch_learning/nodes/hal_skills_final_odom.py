@@ -1076,7 +1076,7 @@ class HalSkillsNode(hm.HelloNode):
                 # in_y = np.abs(goal_pred[1] - end_eff_tensor[1]) < 0.025
                 in_y = np.abs(end_eff_tensor[1] - local_goal_pos[1]) < 0.01
                 in_x = np.abs(local_goal_pos[0] - end_eff_tensor[0]) < 0.012
-                full_extend = self.joint_states.position[wrist_idx] > 0.4
+                full_extend = self.joint_states.position[wrist_idx] > 0.34
 
                 joint_eff = self.joint_states.effort
                 wrist_yaw_eff_idx = self.joint_states.name.index("joint_wrist_roll")

@@ -171,6 +171,7 @@ class HalSkillsNode(hm.HelloNode):
         )
 
         pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_fixed_reduced.pth"
+        # pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_base.pth"
         self.model_ppo = load_ppo_model(pth_path)
         self.model_ppo.eval()
 
@@ -827,7 +828,7 @@ class HalSkillsNode(hm.HelloNode):
         }
         self.move_to_pose(pose)
         self.open_grip()
-        rospy.sleep(1.25)
+        rospy.sleep(1.0)
         self.close_grip()
 
     def subscribe(self):
@@ -958,6 +959,8 @@ class HalSkillsNode(hm.HelloNode):
         goal_pred_y = []
         goal_pred_z = []
 
+        keypressed_index = None
+
         height_pred_buffers = deque(maxlen=10)
         lower_shelf_preds, top_shelf_preds = 0, 0
         fixed_height = None
@@ -1020,7 +1023,7 @@ class HalSkillsNode(hm.HelloNode):
                 local_goal_pos = deepcopy(self.goal_pos_pred)
                 # local_goal_pos = deepcopy(fixed_goal)
                 local_goal_pos[0] = -(local_goal_pos[0] + 0.03)
-                local_goal_pos[1] = -(local_goal_pos[1] + 0.13)  # 0.17
+                local_goal_pos[1] = -(local_goal_pos[1] + 0.14)  # 0.17
                 local_goal_pos[2] = (
                     SECOND_SHELF_Z if local_goal_pos[-1].item() < 0.76 else TOP_SHELF_Z
                 )
@@ -1121,8 +1124,14 @@ class HalSkillsNode(hm.HelloNode):
                 print(f"{rospy.Time().now()}, {keypressed_index=}, {command=}")
                 self.send_command(command)
 
-            rate.sleep()
-            # rospy.sleep(1.5)
+            if keypressed_index is not None:
+                if keypressed_index > 5:
+                    # rate.sleep(1.5)
+                    rospy.sleep(2)
+                else:
+                    rate.sleep()
+            else:
+                rate.sleep()
 
         # publish empty prompt to stop
         # pick_prompt_msg.pick_prompt = None
