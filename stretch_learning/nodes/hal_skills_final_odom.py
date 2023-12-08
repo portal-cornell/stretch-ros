@@ -170,7 +170,7 @@ class HalSkillsNode(hm.HelloNode):
             ]
         )
 
-        pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_fixed_reduced.pth"
+        pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_base.pth"
         self.model_ppo = load_ppo_model(pth_path)
         self.model_ppo.eval()
 
@@ -827,7 +827,7 @@ class HalSkillsNode(hm.HelloNode):
         }
         self.move_to_pose(pose)
         self.open_grip()
-        rospy.sleep(1.25)
+        rospy.sleep(2.5)
         self.close_grip()
 
     def subscribe(self):
@@ -963,7 +963,7 @@ class HalSkillsNode(hm.HelloNode):
         fixed_height = None
         SECOND_SHELF_Z = 0.76
         TOP_SHELF_Z = 0.98
-
+        keypressed_index = None
         # listener = tf.TransformListener()
         # from_frame_rel = "centered_base_link"
         # to_frame_rel = "link_grasp_center"
@@ -975,6 +975,7 @@ class HalSkillsNode(hm.HelloNode):
             # ):
             #     # TODO: should be cleaner way of doing this with service
             self.pick_prompt_publisher.publish(prompt)
+            print("published prompt")
             if (
                 self.joint_states is not None
                 and self.goal_pos_pred is not None
@@ -984,6 +985,7 @@ class HalSkillsNode(hm.HelloNode):
                 step += 1
                 if step <= 20:
                     # drop first 15 to stabilize
+                    print("first")
                     continue
 
                 # continue
@@ -1008,6 +1010,7 @@ class HalSkillsNode(hm.HelloNode):
                     tf2_ros.ConnectivityException,
                     tf2_ros.ExtrapolationException,
                 ):
+                    print("breaking")
                     continue
                 end_eff_tensor = torch.Tensor(
                     [
@@ -1017,6 +1020,7 @@ class HalSkillsNode(hm.HelloNode):
                     ]
                 )
 
+                print("hi")
                 local_goal_pos = deepcopy(self.goal_pos_pred)
                 # local_goal_pos = deepcopy(fixed_goal)
                 local_goal_pos[0] = -(local_goal_pos[0] + 0.03)
@@ -1047,7 +1051,8 @@ class HalSkillsNode(hm.HelloNode):
                 # print(
                 #     f"{trans.transform.translation.x}, {trans.transform.translation.y}, {trans.transform.translation.z}"
                 # )
-
+                print(local_goal_pos)
+                print(end_eff_tensor)
                 point = PointStamped()
                 point.header.frame_id = "base_link"
                 point.point.x = local_goal_pos[0]
@@ -1120,9 +1125,14 @@ class HalSkillsNode(hm.HelloNode):
 
                 print(f"{rospy.Time().now()}, {keypressed_index=}, {command=}")
                 self.send_command(command)
-
-            rate.sleep()
-            # rospy.sleep(1.5)
+            if keypressed_index is not None:
+                if keypressed_index > 5:
+                    # rate.sleep(1.5)
+                    rospy.sleep(2)
+                else:
+                    rate.sleep()
+            else:
+                rate.sleep()
 
         # publish empty prompt to stop
         # pick_prompt_msg.pick_prompt = None

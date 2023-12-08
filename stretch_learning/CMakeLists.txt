@@ -68,6 +68,7 @@ add_service_files(
   HalPick.srv
   HalPlace.srv
   HalMove.srv
+  HalHandover.srv
 )
 
 add_message_files(

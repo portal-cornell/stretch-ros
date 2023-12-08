@@ -8,8 +8,11 @@ import actionlib
 import tf2_ros
 import time
 
-
+# ppo fixed
 from hal_skills_final import HalSkillsNode
+
+# ppo full
+# from hal_skills_final_odom import HalSkillsNode
 
 # from hal_skills_pred_odom import HalSkills
 from trajectory_msgs.msg import JointTrajectoryPoint
@@ -23,14 +26,16 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # pantry_ketchup = (2.72585, 0.90955, math.pi / 2)
 # pantry = pantry_mustard
 # pantry = (2.83585, 1.08955, math.pi / 2)  # actual pantry pos
-PANTRY_LOC = [2.80, 1.08, math.pi / 2]
+PANTRY_LOC = [2.80, 1.05, math.pi / 2]
+SHELF_LOC = [1.55, 0.1, 0]
 # pantry = (2.00585, 0.96955, math.pi / 2)# experimentation
 BETWEEN_TABLE_PANTRY_LOC = (2.0, 1.2, -math.pi / 4)
 TABLE_LOC = (1.55, 2.01, math.pi)
 HOME_LOC = (0.1, 0, 0)
 
 TABLE_HEIGHT = 0.98  # arbitrary table height
-TABLE_WRIST_EXT = 0.38
+TABLE_WRIST_EXT = 0.4
+SHELF_HEIGHT = 0.82
 # skill status
 RUNNING = -1
 SUCCESS = 1
@@ -93,22 +98,43 @@ class Hal(hm.HelloNode):
     def move_between_table_pantry_callback(self, status, result):
         self.current_location = BETWEEN_TABLE_PANTRY_LOC
 
+    def set_initial_move_params(self):
+        rospy.set_param("/move_base/TrajectoryPlannerROS/xy_goal_tolerance", 0.05)
+        rospy.set_param(
+            "/move_base/TrajectoryPlannerROS/yaw_goal_tolerance", 0.20
+        )  # 10 degrees
+
+    def set_finetune_rotation_params(self):
+        # calibrate angles
+        rospy.set_param("/move_base/TrajectoryPlannerROS/xy_goal_tolerance", 0.05)
+        rospy.set_param(
+            "/move_base/TrajectoryPlannerROS/yaw_goal_tolerance", 0.01
+        )  # 10 degrees
+        rospy.set_param(
+            "/move_base/TrajectoryPlannerROS/max_vel_theta", 0.1  # 0.2
+        )  # 10 degrees
+        rospy.set_param(
+            "/move_base/TrajectoryPlannerROS/acc_lim_theta", 0.1  # 0.2
+        )  # 10 degrees
+
     def move_pantry(self):
         """
         !!!! MAKE SURE ARM IS RESETTED BEFORE EXECUTING MOVE
         """
         # this is to execute move
         s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
+        self.set_initial_move_params()
         resp = s()
-        rospy.set_param("/move_base/TrajectoryPlannerROS/xy_goal_tolerance", 0.05)
-        rospy.set_param(
-            "/move_base/TrajectoryPlannerROS/yaw_goal_tolerance", 0.20
-        )  # 10 degrees
         print(resp)
 
         # intermediary point if going to pantry from table
         if self.current_location == TABLE_LOC:
             self.spin_towards_goal(goal_loc=BETWEEN_TABLE_PANTRY_LOC)
+            self.set_initial_move_params()
+            self.nav.go_to(
+                BETWEEN_TABLE_PANTRY_LOC, self.move_between_table_pantry_callback
+            )
+            self.set_finetune_rotation_params()
             self.nav.go_to(
                 BETWEEN_TABLE_PANTRY_LOC, self.move_between_table_pantry_callback
             )
@@ -117,30 +143,19 @@ class Hal(hm.HelloNode):
         self.nav.go_to(
             PANTRY_LOC, self.move_pantry_callback
         )  # go roughly to the pantry
-
-        # calibrate angles
-        rospy.set_param("/move_base/TrajectoryPlannerROS/xy_goal_tolerance", 0.05)
-        rospy.set_param(
-            "/move_base/TrajectoryPlannerROS/yaw_goal_tolerance", 0.02
-        )  # 10 degrees
-        rospy.set_param(
-            "/move_base/TrajectoryPlannerROS/max_vel_theta", 0.2
-        )  # 10 degrees
-        rospy.set_param(
-            "/move_base/TrajectoryPlannerROS/acc_lim_theta", 0.2
-        )  # 10 degrees
+        self.set_finetune_rotation_params()
         self.nav.go_to(PANTRY_LOC, self.angle_calib_callback)
 
         # resetting params
-        rospy.set_param(
-            "/move_base/TrajectoryPlannerROS/yaw_goal_tolerance", 0.09
-        )  # reset params
-        rospy.set_param(
-            "/move_base/TrajectoryPlannerROS/max_vel_theta", 1.0
-        )  # 10 degrees
-        rospy.set_param(
-            "/move_base/TrajectoryPlannerROS/acc_lim_theta", 1.0
-        )  # 10 degrees
+        # rospy.set_param(
+        #     "/move_base/TrajectoryPlannerROS/yaw_goal_tolerance", 0.09
+        # )  # reset params
+        # rospy.set_param(
+        #     "/move_base/TrajectoryPlannerROS/max_vel_theta", 1.0
+        # )  # 10 degrees
+        # rospy.set_param(
+        #     "/move_base/TrajectoryPlannerROS/acc_lim_theta", 1.0
+        # )  # 10 degrees
 
     def angle_calib_callback(self, status, result):
         print("done angle calibration")
@@ -151,7 +166,7 @@ class Hal(hm.HelloNode):
         print("at pantry")
         self.current_location = PANTRY_LOC
         # PANTRY_LOC[1] -= 0.01
-        PANTRY_LOC[2] += 0.06
+        # PANTRY_LOC[2] += 0.06
         # self.action_status = SUCCESS
 
     def move_table(self):
@@ -163,12 +178,14 @@ class Hal(hm.HelloNode):
         # return
         rospy.ServiceProxy("/switch_to_position_mode", Trigger)
         self._lift_arm_primitive()
-        rospy.set_param("/move_base/TrajectoryPlannerROS/xy_goal_tolerance", 0.05)
         s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
         resp = s()
         print(resp)
+        self.set_initial_move_params()
         self.spin_towards_goal(goal_loc=TABLE_LOC)
         self.nav.go_to(TABLE_LOC, self.move_table_callback)  # go roughly to the table
+        self.set_finetune_rotation_params()
+        self.nav.go_to(TABLE_LOC, self.move_table_callback)
 
     def move_table_callback(self, status, result):
         print("at table")
@@ -203,7 +220,7 @@ class Hal(hm.HelloNode):
         self.joint_lift_index = self.hal_skills.joint_states.name.index("joint_lift")
         pose = {
             "wrist_extension": 0.01,
-            "joint_lift": self.pick_starting_height - 0.55,  # for cabinet -0.175
+            "joint_lift": self.pick_starting_height - 0.45,  # for cabinet -0.175
             "joint_wrist_pitch": 0.2,
             "joint_wrist_yaw": -0.09,
         }
@@ -220,17 +237,6 @@ class Hal(hm.HelloNode):
         pose = {"joint_head_pan": pan, "joint_head_tilt": tilt}
         self.move_to_pose(pose)
         return True
-
-    def open_grip(self):
-        point = JointTrajectoryPoint()
-        trajectory_goal = FollowJointTrajectoryGoal()
-        trajectory_goal.goal_time_tolerance = rospy.Time(1.0)
-        trajectory_goal.trajectory.joint_names = ["joint_gripper_finger_left"]
-        point.positions = [0.22]
-        trajectory_goal.trajectory.points = [point]
-        self.trajectory_client.send_goal(trajectory_goal)
-        grip_change_time = 2
-        rospy.sleep(grip_change_time)
 
     def pick_pantry_initial_config(self, rate):
         done_head_pan = False
@@ -249,7 +255,7 @@ class Hal(hm.HelloNode):
                 done_initial_config = self.move_arm_pick_pantry()
             rate.sleep()
         print("done with  move arm")
-        self.open_grip()
+        self.hal_skills.open_grip()
 
     def _lift_arm_primitive(self):
         s = rospy.ServiceProxy("/switch_to_position_mode", Trigger)
@@ -270,13 +276,11 @@ class Hal(hm.HelloNode):
         s = rospy.ServiceProxy("/switch_to_position_mode", Trigger)
         resp = s()
         print(resp)
-
-        # retract arm and go to height
-        rospy.loginfo("Retract arm")
         pose = {
             "wrist_extension": 0.01,
         }
         self.move_to_pose(pose)
+        rospy.loginfo("Retract arm")
 
     def place_table(self):
         # move left
@@ -291,14 +295,36 @@ class Hal(hm.HelloNode):
             "joint_lift": TABLE_HEIGHT,  # for cabinet -0.175
         }
         self.move_to_pose(pose)
-        self.open_grip()
+        self.hal_skills.open_grip()
         # retract wrist
+        self.retract_arm_primitive()
+        self.action_status = SUCCESS
+
+    def move_shelf_callback(self, status, result):
+        print("at shelf")
+        self.current_location = SHELF_LOC
+        self.action_status = SUCCESS
+
+    def place_shelf(self, object):
+        s = rospy.ServiceProxy("/switch_to_position_mode", Trigger)
+        resp = s()
         pose = {
-            "wrist_extension": 0.01,
+            "joint_wrist_yaw": -0.09,
+            "joint_wrist_pitch": 0.2,
         }
         self.move_to_pose(pose)
+        self.hal_skills.handover(object)
+        self.retract_arm_primitive()
 
-        self.action_status = SUCCESS
+        s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
+        resp = s()
+        self.nav.go_to(SHELF_LOC, self.move_shelf_callback)
+        pose = {
+            "wrist_extension": TABLE_WRIST_EXT - 0.1,
+            "joint_lift": SHELF_HEIGHT,
+        }
+        self.move_to_pose(pose)
+        self.hal_skills.open_grip()
 
 
 if __name__ == "__main__":

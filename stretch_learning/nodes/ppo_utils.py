@@ -15,6 +15,7 @@ config = {
     "activation": nn.Tanh,
 }
 
+# # ppo full
 # config = {
 #     "input_size": 3,
 #     "output_size": 10,
@@ -46,12 +47,12 @@ def is_valid(js, delta):
 
 def update_dynamics(js, delta):
     """
-    js: [curr_ext, curr_yaw, curr_lift]
-    deltas: [delta_ext, delta_yaw, delta_lift]
-    returns: updated s
-import torch
-import torch.nn as nn
-tate
+        js: [curr_ext, curr_yaw, curr_lift]
+        deltas: [delta_ext, delta_yaw, delta_lift]
+        returns: updated s
+    import torch
+    import torch.nn as nn
+    tate
     """
     valid_action = False
     if is_valid(js, delta):
@@ -276,6 +277,7 @@ def end_eff_to_xyz(joint_state):
 #     model,
 #     "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy.pth",
 # )
+
 
 class MLP(nn.Module):
     def __init__(

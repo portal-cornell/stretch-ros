@@ -11,9 +11,11 @@ from stretch_learning.srv import (
     HalMove,
     HalPick,
     HalPlace,
+    HalHandover,
     HalMoveResponse,
     HalPickResponse,
     HalPlaceResponse,
+    HalHandoverResponse,
 )
 from geometry_msgs.msg import PoseStamped, Point, Quaternion
 from std_msgs.msg import String
@@ -98,15 +100,30 @@ class TaskServer:
             return HalPickResponse(SUCCESS)
         return HalPickResponse(self.action_status)
 
+    def handle_handover(self, _):
+        print("Handover callback called")
+        if self.action_status == NOT_STARTED:
+            # return HalPickResponse(SUCCESS)
+            self.action_status = RUNNING
+            self.hal.place_shelf(None)
+            self.action_status = NOT_STARTED
+            return HalHandoverResponse(SUCCESS)
+        return HalHandoverResponse(self.action_status)
+
 
 if __name__ == "__main__":
     ts = TaskServer()
     # ts.start()
-    ts.handle_pick("mustard")
+
     # ts.handle_move(None, "pantry")
     # ts.handle_pick("relish")
-    # ts.handle_move(None, "table")
+    ts.handle_move(None, "table")
     # ts.handle_place(None)
+    ts.handle_handover(None)
+
+    # ts.handle_handover(None)
+    # ts.start()
+    # ts.handle_pick("relish")
     # ts.handle_move(None, "pantry")
     # ts.handle_pick("mustard")
     # ts.handle_move(None, "table")
