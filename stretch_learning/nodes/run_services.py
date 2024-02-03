@@ -17,7 +17,7 @@ from stretch_learning.srv import (
     HalPlaceResponse,
     HalHandoverResponse,
 )
-from geometry_msgs.msg import PoseStamped, Point, Quaternion
+from geometry_msgs.msg import PoseStamped, Point, Quaternion, PoseWithCovariance
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -56,6 +56,7 @@ class TaskServer:
 
     def handle_move(self, req):
         print("Move callback called")
+        # rospy.sleep(15)
         if self.action_status == NOT_STARTED:
             # return HalMoveResponse(SUCCESS)
             self.action_status = RUNNING
@@ -83,13 +84,14 @@ class TaskServer:
                 self.hal.place_table()
             elif req == "shelf":
                 self.hal.place_shelf()
-            self.hal.retract_arm_primitive()
+            # self.hal.retract_arm_primitive()
             self.action_status = NOT_STARTED
             return HalPlaceResponse(SUCCESS)
         return HalPlaceResponse(self.action_status)
 
     def handle_pick(self, req):
         print("Pick callback called")
+
         if self.action_status == NOT_STARTED:
             # return HalPickResponse(SUCCESS)
             self.action_status = RUNNING
@@ -113,21 +115,30 @@ class TaskServer:
 
 
 if __name__ == "__main__":
+
+    # os.system("roslaunch engineered_skills demo_sp23.launch map_yaml:=/home/strech/stretch_user/maps/12012023.yaml")
     ts = TaskServer()
-    # ts.start()
-
-    ts.handle_move("pantry")
-    ts.handle_pick("relish")
-    ts.handle_move("table")
-    ts.handle_place("table")
-    ts.handle_handover(None)
-    ts.handle_move("shelf")
-    ts.handle_place("shelf")
-
-    # ts.handle_handover(None)
-    # ts.start()
-    # ts.handle_pick("relish")
     # ts.handle_move("pantry")
-    # ts.handle_pick("mustard")
-    # ts.handle_move("table")
-    # ts.handle_place(None)
+    # ts.handle_pick("blue dish soap")
+    # ts.handle_pick("kosher salt with blue cap")
+    # ts.start()
+
+    # exit()
+    import sys
+    import subprocess
+
+    print("here")
+    if sys.argv[1] == "1":
+        print("1")
+        ts.handle_move("pantry")
+    else:
+        print("2")
+        # ts.handle_pick("Dill Relish")
+        ts.handle_move("table")
+        ts.handle_place("table")
+        time.sleep(5)
+
+        ts.handle_handover(None)
+        ts.handle_move("shelf")
+        ts.hal.hal_skills.move_shelf_primitive()
+        ts.handle_place("shelf")

@@ -29,6 +29,7 @@ from torchvision import transforms
 from cv_bridge import CvBridge, CvBridgeError
 import ppo_utils
 import open_clip
+import sys
 
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PointStamped
@@ -40,20 +41,13 @@ import tf2_ros
 from geometry_msgs.msg import TransformStamped
 from tf2_msgs.msg import TFMessage
 from collections import deque
-import copy
-# import owl_nms_clip as onc
-
+from ppo_env.ppo_train import load_ik_agent
 
 def load_ppo_model(pth_path):
     model = ppo_utils.MLP(**ppo_utils.config)
     model = ppo_utils.load_pth_file_to_model(model, pth_path)
     return model
 
-
-from transformers import OwlViTProcessor
-
-processor = OwlViTProcessor.from_pretrained("google/owlvit-base-patch32")
-tokenizer = open_clip.get_tokenizer("EVA02-B-16")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -130,11 +124,10 @@ joint_labels_for_img = [
 
 
 class HalSkillsNode(hm.HelloNode):
-    def __init__(self):
+    def __init__(self, goal_pos):
         hm.HelloNode.__init__(self)
         self.debug_mode = False
-        self.rate = 1.0
-        self.time = time.time()
+        self.rate = 10.0
         self.trajectory_client = actionlib.SimpleActionClient(
             "/stretch_controller/follow_joint_trajectory", FollowJointTrajectoryAction
         )
@@ -154,53 +147,51 @@ class HalSkillsNode(hm.HelloNode):
         self.odometry = None
         self.joint_states = None
         self.joint_states_data = None
-        self.wrist_image = None
-        self.goal_pos_pred = None
-        self.goal_pos_count = 0
-        self.head_image = None
         self.cv_bridge = CvBridge()
-        self.pick_prompt = None
 
-        OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
-        OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
-
-        self.img_transform = transforms.Compose(
-            [
-                transforms.ToPILImage(),
-                transforms.Resize(224),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD),
-            ]
-        )
-
-        # pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_fixed_reduced.pth"
-        pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_base.pth"
-        # pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy.pth"
-
-        self.model_ppo = load_ppo_model(pth_path)
-        self.model_ppo.eval()
+        self.goal_pos = list(map(float, goal_pos))
+        self.goal_tensor = torch.Tensor(self.goal_pos)
 
         self.rate = 10.0
-        self.pick_prompt_publisher = rospy.Publisher(
-            "/stretch/pick_prompt", String, queue_size=1
-        )
+
         self.goal_point_publisher = rospy.Publisher(
-            "/hal_skills_final/goal_point", PointStamped, queue_size=1
+            "/hal_skills_final/goal_point", PointStamped, queue_size=10
         )
         self.curr_ee_ps_publisher = rospy.Publisher(
-            "hal_skills_final/curr_ee_ps", PointStamped, queue_size=1
+            "hal_skills_final/curr_ee_ps", PointStamped, queue_size=10
         )
         self.subscribe()
+
+        self.init_node()  # comment out when using move
 
         self.buffer = tf2_ros.Buffer()
         self.listener = tf2_ros.TransformListener(self.buffer)
 
-        self.prev_odom = None
-        self.curr_odom = None
-        # self.init_node()  # comment out when using move
+        self.kp_delta_mapping = {
+            # arm out
+            0: [0.04, 0, 0, 0, 0],
+            # arm in
+            1: [-0.04, 0, 0, 0, 0],
+            # gripper right
+            2: [0, -0.10472, 0, 0, 0],
+            # gripper left
+            3: [0, 0.10472, 0, 0, 0],
+            # arm up
+            4: [0, 0, 0.04, 0, 0],
+            # arm down
+            5: [0, 0, -0.04, 0, 0],
+            # base forward (left)
+            6: [0, 0, 0, 0.04, 0],
+            # base backward (right)
+            7: [0, 0, 0, -0.04, 0], 
+            # base rotate left, 
+            8: [0, 0, 0, 0, 0.10472], 
+            # base rotate right, 
+            9: [0, 0, 0, 0, -0.10472]
+        }
 
     def init_node(self):
+        print("Starting node")
         rospy.init_node("hal_skills_node")
         self.node_name = rospy.get_name()
         rospy.loginfo("{0} started".format(self.node_name))
@@ -231,19 +222,6 @@ class HalSkillsNode(hm.HelloNode):
         self.odometry = torch.from_numpy(np.array(raw_odometry)) - self.home_odometry
         self.odometry = self.odom_to_js(self.odometry)
 
-    def goal_pos_callback(self, msg):
-        self.goal_pos_count += 1
-        if self.goal_pos_count <= 20:
-            goal_pos_str = msg.data
-            goal_pos_x, goal_pos_y, goal_pos_z = goal_pos_str.split(",")
-            goal_pos_x = goal_pos_x.split("[[")[1].strip()
-            goal_pos_y = goal_pos_y.strip()
-            goal_pos_z = goal_pos_z.split("]]")[0].strip()
-            self.goal_pos_pred = torch.from_numpy(
-                np.array([float(goal_pos_x), float(goal_pos_y), float(goal_pos_z)])
-            )
-            self.goal_pos_pred.to(self.device).unsqueeze(0)
-
     def joint_states_callback(self, msg):
         self.joint_states = msg
         js_msg = list(zip(msg.name, msg.position, msg.velocity, msg.effort))
@@ -256,50 +234,6 @@ class HalSkillsNode(hm.HelloNode):
             self.joint_states_data = joint_states_data_raw.unsqueeze(0)
         else:
             self.joint_states_data = joint_states_data_raw
-
-    def head_image_callback(self, ros_rgb_image):
-        try:
-            self.raw_head_image = self.cv_bridge.imgmsg_to_cv2(ros_rgb_image, "bgr8")
-            self.head_image = self.img_transform(self.raw_head_image)
-            self.head_image = self.head_image.unsqueeze(0)
-        except CvBridgeError as error:
-            print(error)
-
-    def convert_coordinates(self, point, angle):
-        # Create the rotation matrix using the angle
-        rotation_matrix = np.array(
-            [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
-        )
-
-        # Convert the point to the new coordinate system
-        new_point = np.dot(rotation_matrix, point)
-
-        if np.sign(new_point[0]) >= 0:
-            return True
-        else:
-            return False
-
-    def is_point_in_half_circle(self, rotation_angle, center, radius, test_point):
-        center_offset = 0
-        rotated_angle = np.copy(rotation_angle)
-        rotated_angle += np.pi / 2
-        unit_vector = np.array([math.cos(rotated_angle), math.sin(rotated_angle)])
-        center_copy = np.copy(center)
-        center_copy += center_offset * unit_vector
-
-        # Translate the test point coordinates relative to the center of the circle
-        translated_point = [
-            test_point[0] - center_copy[0],
-            test_point[1] - center_copy[1],
-        ]
-
-        # Calculate the projection of the translated point onto a vector defined by the rotation angle
-        projection = self.convert_coordinates(translated_point, rotated_angle)
-
-        if projection and np.linalg.norm(translated_point) <= radius:
-            return True
-        else:
-            return False
 
     def index_to_keypressed(self, index):
         _index_to_keypressed = {
@@ -598,7 +532,7 @@ class HalSkillsNode(hm.HelloNode):
         self.joint_lift_index = self.joint_states.name.index("joint_lift")
         pose = {
             "wrist_extension": 0.05,
-            "joint_lift": self.pick_starting_height - 0.45,  # for cabinet -0.175
+            "joint_lift": self.pick_starting_height - 0.60,  # for cabinet -0.175
             "joint_wrist_pitch": 0.0,
             "joint_wrist_yaw": 0.0,
             # "joint_wrist_pitch": 0.2,
@@ -756,39 +690,22 @@ class HalSkillsNode(hm.HelloNode):
                 done_initial_config = self.move_arm_open_drawer()
             rate.sleep()
 
-    def start(self):
-        self.action_status = NOT_STARTED
-        self.skill_name = "pick_pantry_all"
-        self.train_type = "bc_oracle"
-
-        # s = rospy.Service("pick_server", Pick, self.callback)
-        rospy.loginfo("Pick server has started")
-        rospy.spin()
-
-    def callback(self, req):
-        if self.action_status == NOT_STARTED:
-            # call hal_skills
-            self.action_status = RUNNING
-            if not req.is_pick:
-                self.skill_name = "place_table"
-        self.main()
+    def odom_to_js(self, odom_data):
+        """
+        Takes in odom data [x, y, theta] from /odom topic and flips the x and y (sc)
+        """
+        odom_data[0] = odom_data[0] * -1
+        odom_data[1] = odom_data[1] * -1
+        return odom_data
 
     # def odom_to_js(self, odom_data):
     #     """
-    #     Takes in odom data [x, y, theta] from /odom topic and flips the x and y
+    #     Takes in odom data [x, y, theta] from /odom topic and rotates +90 degrees (navigation mode)
     #     """
-    #     odom_data[0] = odom_data[0] * -1
-    #     odom_data[1] = odom_data[1] * -1
+    #     tmp = deepcopy(odom_data[0])
+    #     odom_data[0] = deepcopy(odom_data[1]) * -1
+    #     odom_data[1] = tmp
     #     return odom_data
-
-    def odom_to_js(self, odom_data):
-        """
-        Takes in odom data [x, y, theta] from /odom topic and rotates +90 degrees
-        """
-        tmp = deepcopy(odom_data[0])
-        odom_data[0] = deepcopy(odom_data[1]) * -1
-        odom_data[1] = tmp
-        return odom_data
 
     def end_eff_to_xyz(self, joint_state):
         extension = joint_state[0]
@@ -842,20 +759,6 @@ class HalSkillsNode(hm.HelloNode):
 
         return (x1, y1)
 
-    def pick_prompt_callback(self, pick_prompt_msg):
-        self.pick_prompt = pick_prompt_msg.data.lower()
-
-    def handover(self, _):
-        # lift arm
-        pose = {
-            "joint_lift": 0.98,
-            "wrist_extension": 0.35,
-        }
-        self.move_to_pose(pose)
-        self.open_grip()
-        rospy.sleep(1)
-        self.close_grip()
-
     def subscribe(self):
         self.odom_subscriber = rospy.Subscriber(
             "/odom", Odometry, self.odom_callback
@@ -864,22 +767,81 @@ class HalSkillsNode(hm.HelloNode):
         self.joint_states_subscriber = rospy.Subscriber(
             "/stretch/joint_states", JointState, self.joint_states_callback
         )
-        self.goal_pos_subscriber = rospy.Subscriber(
-            "/hal_prediction_node/goal_pos", String, self.goal_pos_callback
-        )
-        self.pick_prompt_subscriber = rospy.Subscriber(
-            "/stretch/pick_prompt", String, self.pick_prompt_callback
-        )
-        self.head_image_subscriber = message_filters.Subscriber(
-            "/head_camera/color/image_raw",
-            Image
-            # "/camera2/color/image_raw",
-            # Image,
-        )
-        self.head_image_subscriber.registerCallback(self.head_image_callback)
 
+    def is_valid(self, js, s_low, s_high):
+        """
+        js: current [ext, yaw, lift, curr_x, curr_y, base_angle]
+        delta: delta [ext, yaw, lift, curr_x, curr_y, base_angle]
+        """
+        valid_js = False
+        # joint_states
+        if js[0] <= s_high[0] and \
+            js[0] >= s_low[0] and \
+            js[1] <= s_high[1] and \
+            js[1] >= s_low[1] and \
+            js[2] <= s_high[2] and \
+            js[2] >= s_low[2]:
+
+            valid_js = True
+        
+        return valid_js
+
+    def update_dynamics(self, js, delta):
+        """
+        js: [curr_ext, curr_yaw, curr_lift, curr_x, curr_y, base_rot]
+        deltas: [delta_ext, delta_yaw, delta_lift, delta_base, base_rot]
+        returns: updated state
+        """
+        js_valid = False
+        js_new = np.copy(js)
+        js_final = np.copy(js)
+
+        # update the joint states with delta
+        js_new[0] = js[0] + delta[0]
+        js_new[1] = js[1] + delta[1]
+        js_new[2] = js[2] + delta[2]
+        js_new[3] = js[3] - delta[3] * np.cos(js[5]).item() # - because positive base trans goes left
+        js_new[4] = js[4] - delta[3] * np.sin(js[5]).item() # - because positive base trans goes left
+        js_new[5] = (js[5] + delta[4] + np.pi) % (2 * np.pi) - np.pi # constrains angle to be within -pi ~ pi
+
+        s_high = np.array([0.457, 1.5, 1.1, 0, 0, 0]) 
+        s_low  = np.array([0.0025, -1.3837,  0.1538, 0, 0, 0])
+        
+        if self.is_valid(js_new, s_low, s_high):
+            js_valid = True
+            js_final = js_new
+        
+        return js_final, js_valid
+
+    def simulate_step(self, end_eff_js, goal_xyz, action):
+        s = end_eff_js
+
+        u = np.copy(action)
+        u = np.array(self.kp_delta_mapping[int(u)]) * (3/5)
+        goal_xyz = np.copy(goal_xyz)
+        
+        state_js, _ = self.update_dynamics(s,u)
+
+        state_xyz = self.end_eff_to_xyz(state_js)
+
+        delta_state = goal_xyz - state_xyz
+
+        return delta_state, state_xyz
+    
+    def get_ik_action(self, end_eff_js, goal_xyz):
+        dist_list = np.zeros(10)
+        curr_states = []
+        for j in range(10):
+            delta_state, state_xyz = self.simulate_step(end_eff_js, goal_xyz, j)
+            dist_list[j] = np.linalg.norm(delta_state)
+            curr_states.append(state_xyz)
+        action = np.argmin(dist_list)
+        print("Minimum distance: " + str(np.min(dist_list)))
+        print("Current State XYZ: " + str(curr_states[action]))
+        return action
+    
     @torch.no_grad()
-    def main(self, prompt, reset):
+    def main(self):
         # rospy.init_node("hal_skills_node")
         # self.node_name = rospy.get_name()
         # rospy.loginfo("{0} started".format(self.node_name))
@@ -909,9 +871,7 @@ class HalSkillsNode(hm.HelloNode):
 
         print("start of reset")
 
-        # get hal to starting position for pick
-        if reset:
-            self.pick_pantry_initial_config(rate)
+        self.pick_pantry_initial_config(rate)
 
         print("start of loop")
         keypresses = []
@@ -960,32 +920,6 @@ class HalSkillsNode(hm.HelloNode):
         prev_inputs_wrist = None
         prev_inputs_head = None
         step = 0
-        head_img_raw_copy = copy.deepcopy(self.raw_head_image)
-        # head_img_raw_copy = cv2.resize(head_img_raw_copy, (1000, 1000))
-        head_rgb_img = copy.deepcopy(Im.fromarray(head_img_raw_copy).convert("RGB"))
-        head_img_copy = copy.deepcopy(self.head_image)
-        # inputs_head = self.processor(
-        #     text=[self.pick_prompt] * 1,
-        #     # images=Im.fromarray(self.raw_head_image),
-        #     images=[Im.fromarray(head_img_raw_copy)] * 1,
-        #     return_tensors="pt",
-        # ).to(self.device)
-        # head_boxes, head_scores, head_labels = onc.owl_vit(
-        #     head_rgb_img, copy.deepcopy(self.pick_prompt)
-        # )
-
-        # (
-        #     head_new_boxes,
-        #     head_boxes_nms,
-        #     head_scores,
-        #     head_labels,
-        # ) = onc.nms_clip(
-        #     head_rgb_img,
-        #     head_boxes,
-        #     head_scores,
-        #     head_labels,
-        #     copy.deepcopy(self.pick_prompt),
-        # )
 
         joint_pos = self.joint_states.position
         lift_idx, wrist_idx, yaw_idx = (
@@ -994,47 +928,27 @@ class HalSkillsNode(hm.HelloNode):
             self.joint_states.name.index("joint_wrist_yaw"),
         )
 
-        js_data = [
-            (x, y) for (x, y) in zip(self.joint_states.name, self.joint_states.position)
-        ]
-        js_data.sort(key=lambda x: x[0])
-        js_data = [x[1] for x in js_data]
-        js_data = torch.tensor(js_data).unsqueeze(0)
-
         fixed_goal = None
         total_goal = np.zeros(3)
         goal_count = 0
 
         self.home_odometry = None
-
         goal_pred_x = []
         goal_pred_y = []
         goal_pred_z = []
 
-        prev_odom = self.odometry[:2]
-
         keypressed_index = None
-        in_image_x = False
 
         height_pred_buffers = deque(maxlen=10)
         lower_shelf_preds, top_shelf_preds = 0, 0
         fixed_height = None
-        SECOND_SHELF_Z = 0.69
-        TOP_SHELF_Z = 0.89
-
-        prev_odom = self.buffer.lookup_transform("odom", "base_link", rospy.Time())
-
-        prev_x = prev_odom.transform.translation.x
-        prev_y = prev_odom.transform.translation.y
-        prev_z = prev_odom.transform.translation.z
-
-        self.prev_odom = np.array([prev_x, prev_y, prev_z])
+        SECOND_SHELF_Z = 0.73
+        TOP_SHELF_Z = 0.94
 
         # listener = tf.TransformListener()
         # from_frame_rel = "centered_base_link"
         # to_frame_rel = "link_grasp_center"
         # while step < 500 and not rospy.is_shutdown():
-        self.time = time.time()
         while not rospy.is_shutdown():
             # while (
             #     self.goal_pos_pred is None
@@ -1042,31 +956,20 @@ class HalSkillsNode(hm.HelloNode):
             #     and not rospy.is_shutdown()
             # ):
             #     # TODO: should be cleaner way of doing this with service
-            self.pick_prompt_publisher.publish(prompt)
-            print(f"{self.goal_pos_pred=}")
 
-            if (
-                self.joint_states_data is not None
-                and self.goal_pos_pred is not None
-                and self.head_image is not None
-                and self.odometry is not None
-            ):
+            if self.joint_states_data is not None and self.odometry is not None and self.home_odometry is not None:
                 # step += 1
 
                 # continue
                 # fixed goal pred
                 # print(f"FIXED GOAL: {fixed_goal}")
-                # curr_odom = self.odometry[:2]
-                # change = curr_odom - prev_odom
-                # prev_odom = deepcopy(curr_odom)
-                # if fixed_goal is not None and in_image_x:
+                # if fixed_goal is not None and step > 47:
                 #     self.goal_pos_pred = deepcopy(fixed_goal)
-
-                #     self.goal_pos_pred[:2] -= change
+                #     self.goal_pos_pred[:2] -= self.odometry[:2]
                 #     print("-" * 80)
                 # else:
                 #     fixed_goal = deepcopy(self.goal_pos_pred)
-                #     # fixed_goal[:2] -= self.odometry[:2]
+                #     fixed_goal[:2] -= self.odometry[:2]
 
                 if (
                     self.joint_states_data is not None
@@ -1077,67 +980,31 @@ class HalSkillsNode(hm.HelloNode):
                     continue
 
                 # print("-" * 80)
-
-                try:
-                    gripper_finger_right = self.buffer.lookup_transform(
-                        "base_link", "link_gripper_fingertip_right", rospy.Time()
-                    )
-                    gripper_finger_left = self.buffer.lookup_transform(
-                        "base_link", "link_gripper_fingertip_left", rospy.Time()
-                    )
-                except (
-                    tf2_ros.LookupException,
-                    tf2_ros.ConnectivityException,
-                    tf2_ros.ExtrapolationException,
-                ) as e:
-                    print(e)
-                    continue
-
-                end_eff_tensor = torch.Tensor(
-                    [
-                        (
-                            gripper_finger_left.transform.translation.x
-                            + gripper_finger_right.transform.translation.x
-                        )
-                        / 2,
-                        (
-                            gripper_finger_left.transform.translation.y
-                            + gripper_finger_right.transform.translation.y
-                        )
-                        / 2,
-                        (
-                            gripper_finger_left.transform.translation.z
-                            + gripper_finger_right.transform.translation.z
-                        )
-                        / 2,
-                    ]
+                joint_pos = self.joint_states.position
+                lift_idx, wrist_idx, yaw_idx = (
+                    self.joint_states.name.index("joint_lift"),
+                    self.joint_states.name.index("wrist_extension"),
+                    self.joint_states.name.index("joint_wrist_yaw"),
                 )
+                curr_js = [
+                    joint_pos[wrist_idx], 
+                    joint_pos[yaw_idx], 
+                    joint_pos[lift_idx], 
+                    self.odometry[0], 
+                    self.odometry[1], 
+                    self.odometry[2]
+                ]
+                end_eff_tensor = self.end_eff_to_xyz(curr_js)
 
-                # end_eff_tensor[0] -= 0.01
-                # end_eff_tensor[1] -= 0.01
-
-                curr_odom = self.buffer.lookup_transform(
-                    "odom", "base_link", rospy.Time()
-                )
-
-                curr_x = curr_odom.transform.translation.x
-                curr_y = curr_odom.transform.translation.y
-                curr_z = curr_odom.transform.translation.z
-
-                self.curr_odom = np.array([curr_x, curr_y, curr_z])
-
-                change = self.curr_odom - self.prev_odom
-                # print(f"{change=}")
-                local_goal_pos = deepcopy(self.goal_pos_pred)
-
-                local_goal_pos = local_goal_pos + change
+                local_goal_pos = deepcopy(self.goal_tensor)
+                local_goal_pos[3:] = local_goal_pos[3:] - self.home_odometry
+                local_goal_pos[3:] = self.odom_to_js(local_goal_pos[3:])
+                local_goal_pos = self.end_eff_to_xyz(local_goal_pos)
                 # local_goal_pos = deepcopy(fixed_goal)
                 # @NAT: add any offsets here
-                local_goal_pos[0] = -(local_goal_pos[0])
-                local_goal_pos[1] = -(local_goal_pos[1] + 0.03)  # 0.17
-                # local_goal_pos[2] += 0.05
+
                 # local_goal_pos[2] = (
-                #     SECOND_SHELF_Z if local_goal_pos[-1].item() < 0.78 else TOP_SHELF_Z
+                #     SECOND_SHELF_Z if local_goal_pos[-1].item() < 0.76 else TOP_SHELF_Z
                 # )
 
                 # if robot predicts 10 top shelf, go top. else go bottom
@@ -1149,12 +1016,6 @@ class HalSkillsNode(hm.HelloNode):
                 # local_goal_pos[2] = self._find_mode(height_pred_buffers)
                 # print(height_pred_buffers)
                 # print(local_goal_pos[2])
-
-                # if "mustard" in prompt.lower():
-                #     local_goal_pos[2] = SECOND_SHELF_Z
-                #     # SECOND_SHELF_Z
-                # elif "relish" in prompt.lower():
-                #     local_goal_pos[2] = TOP_SHELF_Z
 
                 # goal_tensors.append(local_goal_pos)
                 # end_eff_tensors.append(end_eff_tensor)
@@ -1190,20 +1051,13 @@ class HalSkillsNode(hm.HelloNode):
                 # print(f"{point=}")
                 # print()
                 # continue
-                local_goal_pos[:2] = -local_goal_pos[:2]
-                end_eff_tensor[:2] = -end_eff_tensor[:2]
+                
                 in_z = np.abs(local_goal_pos[2] - end_eff_tensor[2]) < 0.018
-                deep_y = (end_eff_tensor[1] - local_goal_pos[1] >= 0.001) and (
-                    end_eff_tensor[1] - local_goal_pos[1]
-                ) <= 0.024
-                in_y = (
-                    np.abs(end_eff_tensor[1] - local_goal_pos[1]) < 0.001
-                ) or deep_y  # 0.01
+                # in_y = np.abs(goal_pred[1] - end_eff_tensor[1]) < 0.025
+                deep_y = (end_eff_tensor[1] - local_goal_pos[1] >= 0.001) and (end_eff_tensor[1] - local_goal_pos[1]) <= 0.024
+                in_y = (np.abs(end_eff_tensor[1] - local_goal_pos[1]) < 0.001) or deep_y # 0.01
                 in_x = np.abs(local_goal_pos[0] - end_eff_tensor[0]) < 0.012  # 0.012
-                in_image_x = (
-                    np.abs(local_goal_pos[0] - end_eff_tensor[0]) < 0.1
-                )  # 0.012
-                full_extend = self.joint_states.position[wrist_idx] > 0.20
+                full_extend = self.joint_states.position[wrist_idx] > 0.36
 
                 joint_eff = self.joint_states.effort
                 wrist_yaw_eff_idx = self.joint_states.name.index("joint_wrist_roll")
@@ -1214,7 +1068,7 @@ class HalSkillsNode(hm.HelloNode):
 
                 print(f"{in_x=}, {in_y=}, {in_z=}, {yaw_eff=}, {full_extend=}")
                 # if (in_circle or yaw_eff >= 1) and in_z:
-                if (in_z and in_y and in_x) or yaw_eff >= 2:
+                if (in_z and in_y and in_x) or yaw_eff >= 2 or full_extend:
                     # print(f"{in_circle=}")
                     # print(f"{in_half_circle=}")
                     print("Got to goal!!")
@@ -1222,28 +1076,16 @@ class HalSkillsNode(hm.HelloNode):
                     self.lift_arm_primitive()
                     break
 
-                print(f"{end_eff_tensor=}")
-                print(f"{local_goal_pos=}")
-
-                inp = local_goal_pos - end_eff_tensor
-                # inp[0] = -inp[0]
-                # inp[1] = -inp[1]
-                # inp = torch.cat((inp,torch.tensor([self.odometry[2]])),dim=0)
-
-                inp = inp.to(torch.float32)
-
                 start = time.time()
-                print(f"Input to model {inp}")
-                prediction = self.model_ppo(inp)
-                print(f"{prediction=}")
+                keypressed_index = self.get_ik_action(curr_js, local_goal_pos)
+                
                 print(f"ppo: {time.time() - start}")
                 times.append(time.time() - start)
 
-                keypressed_index = torch.argmax(prediction).item()
                 keypressed = kp_reduced_mapping[keypressed_index]
                 keypressed = self.index_to_keypressed(keypressed)
 
-                _pos = (local_goal_pos - end_eff_tensor).cpu().numpy()
+                _pos = (local_goal_pos - end_eff_tensor)
                 print(f"pos: {_pos}")
                 onpolicy_pos.append(_pos)
                 onpolicy_kp.append(keypressed_index)
@@ -1260,69 +1102,28 @@ class HalSkillsNode(hm.HelloNode):
 
             if keypressed_index is not None:
                 if keypressed_index > 5:
-                    # rate.sleep()
+                    # rate.sleep(1.5)
                     rospy.sleep(2)
                 else:
                     rate.sleep()
             else:
                 rate.sleep()
-            print(f"time of loop = {time.time() - self.time}")
-            self.time = time.time()
 
         # publish empty prompt to stop
         # pick_prompt_msg.pick_prompt = None
         # pick_prompt_msg.do_pick = False
-        self.pick_prompt_publisher.publish(prompt)
-
-        self.prev_odom = deepcopy(self.curr_odom)
 
 
 def get_args():
-    supported_skills = [
-        "pick_pantry",
-        "place_table",
-        "open_drawer",
-        "pick_pepper",
-        "pick_pantry_all",
-        "pick_whisk",
-        "pick_whisk_pantry",
-        "pick_salt",
-        "point_shoot",
-    ]
-    supported_models = ["visuomotor_bc", "irl"]
-    supported_types = [
-        # visuomotor_bc
-        "reg",
-        "reg-no-vel",
-        "end-eff",
-        "end-eff-img",
-        "end-eff-img-ft",
-        "bc_top",
-        "bc_all",
-        "bc_oracle",
-        "resnet_bc_all",
-        "resnet_bc_oracle",
-        # irl
-        "iql",
-    ]
-
     parser = argparse.ArgumentParser(description="main_slighting")
-    parser.add_argument(
-        "--skill_name", type=str, choices=supported_skills, default="pick_salt"
-    )
-    parser.add_argument(
-        "--input_dim", type=str, choices=["4d", "2d"], required=False, default="2d"
-    )
-    parser.add_argument("--use_delta", action="store_true", default=True)
-    parser.add_argument(
-        "--model_type", type=str, choices=supported_models, default="visuomotor_bc"
-    )
-    parser.add_argument(
-        "--train_type", type=str, choices=supported_types, default="bc_oracle"
-    )
+
+    parser.add_argument("--goal_pos", type=str, required=False, default="0,0")
+    return parser.parse_args(rospy.myargv()[1:])
 
 
 if __name__ == "__main__":
-    node = HalSkillsNode()
+    args = get_args()
+    goal_pos = args.goal_pos.split(",")
+    node = HalSkillsNode(goal_pos)
     # node.start()
     node.main()

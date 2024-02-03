@@ -32,7 +32,7 @@
       name="robot_state_publisher"
       pkg="robot_state_publisher"
       type="robot_state_publisher" >
-    <param name="publish_frequency" value="15.0"/>
+    <param name="publish_frequency" value="1.0"/>
   </node>
 
   <node name="stretch_driver" pkg="stretch_core" type="stretch_driver" output="screen">

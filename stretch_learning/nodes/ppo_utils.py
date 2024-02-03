@@ -6,21 +6,28 @@ import matplotlib.pyplot as plt
 import sys
 
 # ppo fixed
-config = {
-    "input_size": 3,
-    "output_size": 6,
-    "hidden_dim": 64,
-    # "hidden_dim": 100,
-    "num_layers": 4,
-    "activation": nn.Tanh,
-}
-
-# # ppo full
 # config = {
 #     "input_size": 3,
+#     "output_size": 6,
+#     "hidden_dim": 64,
+#     # "hidden_dim": 100,
+#     "num_layers": 4,
+#     "activation": nn.Tanh,
+# }
+
+# # ppo full (old)
+config = {
+    "input_size": 3,
+    "output_size": 10,
+    "hidden_dim": 256,
+    "num_layers": 4,  # 4 for small 5 for big
+    "activation": nn.Tanh,
+}
+# config = {
+#     "input_size": 4,
 #     "output_size": 10,
 #     "hidden_dim": 256,
-#     "num_layers": 4,  # 4 for small 5 for big
+#     "num_layers": 5,  # 4 for small 5 for big
 #     "activation": nn.Tanh,
 # }
 
@@ -234,7 +241,7 @@ def load_pth_file_to_model(model, path="policy.pth"):
     # model = MLP(**config)
 
     for key in list(result.keys()):
-        if "model.6" in key:
+        if "model.6" in key:  # model.8 if model is big 6 if small
             continue
 
         result[key.replace("mlp_extractor.policy_net", "model")] = result.pop(key)

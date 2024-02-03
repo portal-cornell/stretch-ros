@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import time
+import cv2
+import csv
 import rospy
 import math
 import argparse
@@ -14,7 +16,6 @@ from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectoryPoint
 from control_msgs.msg import FollowJointTrajectoryGoal, FollowJointTrajectoryAction
 from custom_msg_python.msg import Keypressed
-from stretch_learning.msg import PickPrompt
 import hello_helpers.hello_misc as hm
 import matplotlib.pyplot as plt
 import pickle as pl
@@ -29,19 +30,11 @@ from torchvision import transforms
 from cv_bridge import CvBridge, CvBridgeError
 import ppo_utils
 import open_clip
+import copy
+import sys
+from copy import deepcopy
 
 from std_srvs.srv import Trigger
-from geometry_msgs.msg import PointStamped
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3 import PPO
-from copy import deepcopy
-import tf2_py
-import tf2_ros
-from geometry_msgs.msg import TransformStamped
-from tf2_msgs.msg import TFMessage
-from collections import deque
-import copy
-# import owl_nms_clip as onc
 
 
 def load_ppo_model(pth_path):
@@ -54,6 +47,8 @@ from transformers import OwlViTProcessor
 
 processor = OwlViTProcessor.from_pretrained("google/owlvit-base-patch32")
 tokenizer = open_clip.get_tokenizer("EVA02-B-16")
+
+# from stretch_learning.srv import Pick, PickResponse
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -103,12 +98,12 @@ kp_mapping = [
     "Arm in",
     "Gripper right",
     "Gripper left",
-    "Lift Up",
-    "Lift Down",
     "Base Left",
     "Base Right",
     "Base Rotate Left",
     "Base Rotate Right",
+    "Lift Up",
+    "Lift Down",
 ]
 
 joint_labels_for_img = [
@@ -129,12 +124,11 @@ joint_labels_for_img = [
 ]
 
 
-class HalSkillsNode(hm.HelloNode):
+class HalSkills(hm.HelloNode):
     def __init__(self):
         hm.HelloNode.__init__(self)
         self.debug_mode = False
-        self.rate = 1.0
-        self.time = time.time()
+        self.rate = 10.0
         self.trajectory_client = actionlib.SimpleActionClient(
             "/stretch_controller/follow_joint_trajectory", FollowJointTrajectoryAction
         )
@@ -146,20 +140,18 @@ class HalSkillsNode(hm.HelloNode):
         self.small_translate = 0.005  # 0.02
         self.medium_deg = 6.0
         self.medium_rad = self.rad_per_deg * self.medium_deg * (3 / 5)
-        self.medium_translate = 0.03 * (3 / 5)
+        self.medium_translate = 0.04 * (3 / 5)
         self.mode = "position"  #'manipulation' #'navigation'
         # self.mode = "navigation"                              NOTE: changed frm  navigation to position, since navigation does not support base movement
 
         self.home_odometry = None
         self.odometry = None
         self.joint_states = None
-        self.joint_states_data = None
         self.wrist_image = None
         self.goal_pos_pred = None
-        self.goal_pos_count = 0
         self.head_image = None
+        self.joint_states_data = None
         self.cv_bridge = CvBridge()
-        self.pick_prompt = None
 
         OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
         OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
@@ -173,32 +165,104 @@ class HalSkillsNode(hm.HelloNode):
                 transforms.Normalize(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD),
             ]
         )
-
         # pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_fixed_reduced.pth"
-        pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_base.pth"
-        # pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy.pth"
+        # pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_base.pth"
+        # self.model_ppo = load_ppo_model(pth_path)
+        # self.model_ppo.eval()
 
-        self.model_ppo = load_ppo_model(pth_path)
-        self.model_ppo.eval()
+        self.init_node()  # comment out when using move
 
-        self.rate = 10.0
-        self.pick_prompt_publisher = rospy.Publisher(
-            "/stretch/pick_prompt", String, queue_size=1
+    def load_iql_model(self, ckpt_dir):
+        img_comp_dims = 32
+        joint_pos, joint_vel, joint_force = True, True, True
+        img_js_net = ImageJointStateNet(
+            img_comp_dims, joint_pos, joint_vel, joint_force
         )
-        self.goal_point_publisher = rospy.Publisher(
-            "/hal_skills_final/goal_point", PointStamped, queue_size=1
-        )
-        self.curr_ee_ps_publisher = rospy.Publisher(
-            "hal_skills_final/curr_ee_ps", PointStamped, queue_size=1
-        )
-        self.subscribe()
 
-        self.buffer = tf2_ros.Buffer()
-        self.listener = tf2_ros.TransformListener(self.buffer)
+        state_dim, action_dim = 32 + 14 * 3 + 3, 17
+        max_action = 1
+        n_hidden = 3
+        iql_deterministic = True
+        model = load_iql_trainer(
+            device,
+            iql_deterministic,
+            state_dim,
+            action_dim,
+            max_action,
+            n_hidden,
+            img_js_net,
+        )
 
-        self.prev_odom = None
-        self.curr_odom = None
-        # self.init_node()  # comment out when using move
+        ckpts = [
+            ckpt for ckpt in Path(ckpt_dir).glob("*.pt") if "last" not in ckpt.stem
+        ]
+        ckpts.sort(key=lambda x: float(x.stem.split("_", 3)[2]))
+        ckpt_path = ckpts[0]
+        ckpt_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_pepper_salt/d745bda3_epoch=100_val_loss=0.000173.pt"
+        print(f"Loading checkpoint from {str(ckpt_path)}.\n")
+        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+
+        state_dict = torch.load(
+            "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_pantry/visuomotor_bc/bc_oracle/epoch=400_success=1.000.pt",
+            map_location=torch.device("cpu"),
+        )
+        for key in list(state_dict.keys()):
+            state_dict[key.replace("fc.", "")] = state_dict.pop(key)
+        model.fc_last.load_state_dict(state_dict, strict=False)
+
+        model.img_js_net.eval()
+        model.actor.eval()
+        return model
+
+    def load_bc_model(self, ckpt_dir):
+        # print(ckpt_dir)
+        # ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt") if "last" not in ckpt.stem]
+        # ckpts += [ckpt for ckpt in ckpt_dir.glob("*.ckpt") if "last" not in ckpt.stem]
+        # # import pdb; pdb.set_trace()
+        # if "val_acc" in str(ckpts[0]):
+        #     ckpts.sort(key=lambda x: float(x.stem.split("val_acc=")[1]), reverse=True)
+        # else:
+        #     ckpts.sort(
+        #         key=lambda x: float(x.stem.split("combined_acc=")[1]), reverse=True
+        #     )
+
+        # ckpt_path = ckpts[-4]
+        # ckpt_path = Path(ckpt_dir, "last.ckpt")
+        # print(f"Loading checkpoint from {str(ckpt_path)}.\n")
+
+        # state_dict = torch.load(ckpt_path, map_location=device)
+        # modified_dict = {}
+        # for key, value in state_dict.items():
+        #     key = key.replace("_orig_mod.", "")
+        #     modified_dict[key] = value
+        # model.load_state_dict(modified_dict)
+
+        # ckpt_dir = Path("/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/point_shoot/ckpts")
+        # ckpts = [ckpt for ckpt in ckpt_dir.glob("*.pt")]
+        # ckpt_path = ckpts[-1]
+        ckpt_path = Path(
+            "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_pepper_salt/f3bfc93c_epoch=130_val_loss=0.000744.pt"
+        )
+
+        model = BC(num_classes=4, device="cpu")
+
+        print(f"Loading checkpoint from {str(ckpt_path)}.\n")
+        state_dict = torch.load(ckpt_path, map_location=device)
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        print(missing_keys)
+        print(unexpected_keys)
+
+        # state_dict = torch.load(
+        #     "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/pick_pantry/visuomotor_bc/bc_oracle/epoch=400_success=1.000.pt",
+        #     map_location=torch.device("cpu"),
+        # )
+        # for key in list(state_dict.keys()):
+        #     state_dict[key.replace("fc.", "")] = state_dict.pop(key)
+        # model.fc_last.load_state_dict(state_dict, strict=False)
+        model.to(device)
+        model.eval()
+
+        return model
 
     def init_node(self):
         rospy.init_node("hal_skills_node")
@@ -232,17 +296,36 @@ class HalSkillsNode(hm.HelloNode):
         self.odometry = self.odom_to_js(self.odometry)
 
     def goal_pos_callback(self, msg):
-        self.goal_pos_count += 1
-        if self.goal_pos_count <= 20:
-            goal_pos_str = msg.data
-            goal_pos_x, goal_pos_y, goal_pos_z = goal_pos_str.split(",")
-            goal_pos_x = goal_pos_x.split("[[")[1].strip()
-            goal_pos_y = goal_pos_y.strip()
-            goal_pos_z = goal_pos_z.split("]]")[0].strip()
-            self.goal_pos_pred = torch.from_numpy(
-                np.array([float(goal_pos_x), float(goal_pos_y), float(goal_pos_z)])
-            )
-            self.goal_pos_pred.to(self.device).unsqueeze(0)
+        kp_reduced_mapping = {
+            # arm out
+            0: 3,
+            # arm in
+            1: 4,
+            # gripper right
+            2: 9,
+            # gripper left
+            3: 10,
+            # base forward
+            4: 5,
+            # base back
+            5: 6,
+            # base rotate left
+            6: 7,
+            # base rotate right
+            7: 8,
+            # arm up
+            8: 1,
+            # arm down
+            9: 2,
+        }
+        print("goal pos callback called")
+        goal_pos_str = msg.data
+        goal_action = int(goal_pos_str)
+        keypressed = kp_reduced_mapping[goal_action]
+        keypressed = self.index_to_keypressed(keypressed)
+
+        self.goal_pos_pred = keypressed
+        # self.goal_pos_pred.to(self.device).unsqueeze(0)
 
     def joint_states_callback(self, msg):
         self.joint_states = msg
@@ -251,11 +334,9 @@ class HalSkillsNode(hm.HelloNode):
         js_arr = []
         for idx, (name, pos, vel, eff) in enumerate(js_msg):
             js_arr.extend([pos, vel, eff])
-        joint_states_data_raw = torch.from_numpy(np.array(js_arr, dtype=np.float32))
-        if len(joint_states_data_raw.size()) <= 1:
-            self.joint_states_data = joint_states_data_raw.unsqueeze(0)
-        else:
-            self.joint_states_data = joint_states_data_raw
+        self.joint_states_data = torch.from_numpy(np.array(js_arr, dtype=np.float32))
+        if len(self.joint_states_data.size()) <= 1:
+            self.joint_states_data = self.joint_states_data.unsqueeze(0)
 
     def head_image_callback(self, ros_rgb_image):
         try:
@@ -550,7 +631,7 @@ class HalSkillsNode(hm.HelloNode):
             self.trajectory_client.send_goal(trajectory_goal)
 
     ######################### Hard Coded Commands #########################
-    def close_grip(self):
+    def grasp_primitive(self):
         point = JointTrajectoryPoint()
         trajectory_goal = FollowJointTrajectoryGoal()
         trajectory_goal.goal_time_tolerance = rospy.Time(1.0)
@@ -597,12 +678,10 @@ class HalSkillsNode(hm.HelloNode):
         self.pick_starting_height = 0.998
         self.joint_lift_index = self.joint_states.name.index("joint_lift")
         pose = {
-            "wrist_extension": 0.05,
-            "joint_lift": self.pick_starting_height - 0.45,  # for cabinet -0.175
-            "joint_wrist_pitch": 0.0,
-            "joint_wrist_yaw": 0.0,
-            # "joint_wrist_pitch": 0.2,
-            # "joint_wrist_yaw": -0.09,
+            "wrist_extension": 0.01,
+            # "joint_lift": self.pick_starting_height - 0.55,  # for cabinet -0.175
+            "joint_wrist_pitch": 0.2,
+            "joint_wrist_yaw": -0.09,
         }
         self.base_gripper_yaw = -0.09
         self.gripper_len = 0.22
@@ -756,38 +835,31 @@ class HalSkillsNode(hm.HelloNode):
                 done_initial_config = self.move_arm_open_drawer()
             rate.sleep()
 
-    def start(self):
-        self.action_status = NOT_STARTED
-        self.skill_name = "pick_pantry_all"
-        self.train_type = "bc_oracle"
+    # def start(self):
+    #     self.action_status = NOT_STARTED
+    #     self.skill_name = "pick_pantry_all"
+    #     self.train_type = "bc_oracle"
 
-        # s = rospy.Service("pick_server", Pick, self.callback)
-        rospy.loginfo("Pick server has started")
-        rospy.spin()
+    #     s = rospy.Service("pick_server", Pick, self.callback)
+    #     rospy.loginfo("Pick server has started")
+    #     rospy.spin()
 
-    def callback(self, req):
-        if self.action_status == NOT_STARTED:
-            # call hal_skills
-            self.action_status = RUNNING
-            if not req.is_pick:
-                self.skill_name = "place_table"
-        self.main()
+    # def callback(self, req):
+    #     if self.action_status == NOT_STARTED:
+    #         # call hal_skills
+    #         self.action_status = RUNNING
+    #         if not req.is_pick:
+    #             self.skill_name = "place_table"
+    #     self.main()
 
-    # def odom_to_js(self, odom_data):
-    #     """
-    #     Takes in odom data [x, y, theta] from /odom topic and flips the x and y
-    #     """
-    #     odom_data[0] = odom_data[0] * -1
-    #     odom_data[1] = odom_data[1] * -1
-    #     return odom_data
+    #     return PickResponse(self.action_status)
 
     def odom_to_js(self, odom_data):
         """
-        Takes in odom data [x, y, theta] from /odom topic and rotates +90 degrees
+        Takes in odom data [x, y, theta] from /odom topic and flips the x and y
         """
-        tmp = deepcopy(odom_data[0])
-        odom_data[0] = deepcopy(odom_data[1]) * -1
-        odom_data[1] = tmp
+        odom_data[0] = odom_data[0] * -1
+        odom_data[1] = odom_data[1] * -1
         return odom_data
 
     def end_eff_to_xyz(self, joint_state):
@@ -802,7 +874,6 @@ class HalSkillsNode(hm.HelloNode):
         base_gripper_yaw = -0.09
 
         # find cx, cy in base frame
-        # point = (0.1, 0.17)
         point = (0.03, 0.17)
         pivot = (0, 0)
         cx, cy = self.rotate_odom(point, base_angle, pivot)
@@ -823,11 +894,6 @@ class HalSkillsNode(hm.HelloNode):
 
         return np.array([x.item(), y.item(), z])
 
-    def _find_mode(self, buffer):
-        vals, counts = np.unique(buffer, return_counts=True)
-        index = np.argmax(counts)
-        return vals[index]
-
     def rotate_odom(self, coord, angle, pivot):
         x1 = (
             math.cos(angle) * (coord[0] - pivot[0])
@@ -842,44 +908,8 @@ class HalSkillsNode(hm.HelloNode):
 
         return (x1, y1)
 
-    def pick_prompt_callback(self, pick_prompt_msg):
-        self.pick_prompt = pick_prompt_msg.data.lower()
-
-    def handover(self, _):
-        # lift arm
-        pose = {
-            "joint_lift": 0.98,
-            "wrist_extension": 0.35,
-        }
-        self.move_to_pose(pose)
-        self.open_grip()
-        rospy.sleep(1)
-        self.close_grip()
-
-    def subscribe(self):
-        self.odom_subscriber = rospy.Subscriber(
-            "/odom", Odometry, self.odom_callback
-        )  # NOTE: subscribe to odom
-
-        self.joint_states_subscriber = rospy.Subscriber(
-            "/stretch/joint_states", JointState, self.joint_states_callback
-        )
-        self.goal_pos_subscriber = rospy.Subscriber(
-            "/hal_prediction_node/goal_pos", String, self.goal_pos_callback
-        )
-        self.pick_prompt_subscriber = rospy.Subscriber(
-            "/stretch/pick_prompt", String, self.pick_prompt_callback
-        )
-        self.head_image_subscriber = message_filters.Subscriber(
-            "/head_camera/color/image_raw",
-            Image
-            # "/camera2/color/image_raw",
-            # Image,
-        )
-        self.head_image_subscriber.registerCallback(self.head_image_callback)
-
     @torch.no_grad()
-    def main(self, prompt, reset):
+    def main(self):
         # rospy.init_node("hal_skills_node")
         # self.node_name = rospy.get_name()
         # rospy.loginfo("{0} started".format(self.node_name))
@@ -890,8 +920,23 @@ class HalSkillsNode(hm.HelloNode):
         resp = s()
         print(resp)
 
+        self.odom_subscriber = rospy.Subscriber(
+            "/odom", Odometry, self.odom_callback
+        )  # NOTE: subscribe to odom
+
+        self.joint_states_subscriber = rospy.Subscriber(
+            "/stretch/joint_states", JointState, self.joint_states_callback
+        )
+        self.goal_pos_subscriber = rospy.Subscriber(
+            "/hal_prediction_node/goal_pos", String, self.goal_pos_callback
+        )
+        self.head_image_subscriber = message_filters.Subscriber(
+            "/head_camera/color/image_raw", Image
+        )
+        self.head_image_subscriber.registerCallback(self.head_image_callback)
+
         rate = rospy.Rate(self.rate)
-        # rospy.sleep(15)
+
         if self.debug_mode:
             print("\n\n********IN DEBUG MODE**********\n\n")
             cwd = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning"
@@ -903,15 +948,15 @@ class HalSkillsNode(hm.HelloNode):
                 for img in img_dir.glob("*.png"):
                     img.unlink()
 
-        # self.close_grip()
+        # self.grasp_primitive()
         # self.retract_arm_primitive()
         # self.lift_arm_primitive()
 
         print("start of reset")
 
         # get hal to starting position for pick
-        if reset:
-            self.pick_pantry_initial_config(rate)
+
+        self.pick_pantry_initial_config(rate)
 
         print("start of loop")
         keypresses = []
@@ -929,18 +974,18 @@ class HalSkillsNode(hm.HelloNode):
             2: 9,
             # gripper left
             3: 10,
-            # arm up
-            4: 1,
-            # arm down
-            5: 2,
             # base forward
-            6: 5,
+            4: 5,
             # base back
-            7: 6,
+            5: 6,
             # base rotate left
-            8: 7,
+            6: 7,
             # base rotate right
-            9: 8,
+            7: 8,
+            # arm up
+            8: 1,
+            # arm down
+            9: 2,
         }
 
         initial_pos = None
@@ -960,32 +1005,6 @@ class HalSkillsNode(hm.HelloNode):
         prev_inputs_wrist = None
         prev_inputs_head = None
         step = 0
-        head_img_raw_copy = copy.deepcopy(self.raw_head_image)
-        # head_img_raw_copy = cv2.resize(head_img_raw_copy, (1000, 1000))
-        head_rgb_img = copy.deepcopy(Im.fromarray(head_img_raw_copy).convert("RGB"))
-        head_img_copy = copy.deepcopy(self.head_image)
-        # inputs_head = self.processor(
-        #     text=[self.pick_prompt] * 1,
-        #     # images=Im.fromarray(self.raw_head_image),
-        #     images=[Im.fromarray(head_img_raw_copy)] * 1,
-        #     return_tensors="pt",
-        # ).to(self.device)
-        # head_boxes, head_scores, head_labels = onc.owl_vit(
-        #     head_rgb_img, copy.deepcopy(self.pick_prompt)
-        # )
-
-        # (
-        #     head_new_boxes,
-        #     head_boxes_nms,
-        #     head_scores,
-        #     head_labels,
-        # ) = onc.nms_clip(
-        #     head_rgb_img,
-        #     head_boxes,
-        #     head_scores,
-        #     head_labels,
-        #     copy.deepcopy(self.pick_prompt),
-        # )
 
         joint_pos = self.joint_states.position
         lift_idx, wrist_idx, yaw_idx = (
@@ -1001,280 +1020,195 @@ class HalSkillsNode(hm.HelloNode):
         js_data = [x[1] for x in js_data]
         js_data = torch.tensor(js_data).unsqueeze(0)
 
+        end_eff_tensor = torch.Tensor(
+            self.end_eff_to_xyz(
+                [
+                    joint_pos[wrist_idx],
+                    joint_pos[yaw_idx],
+                    joint_pos[lift_idx],
+                    self.odometry[0],
+                    self.odometry[1],
+                    self.odometry[2],
+                ]
+            )
+        )
+
+        # _pos = (self.goal_pos_pred - end_eff_tensor).cpu().numpy()
+        # print(f"delta_pos: {_pos}")
+        # onpolicy_pos.append(_pos)
         fixed_goal = None
+        avg_goal_lst = []
         total_goal = np.zeros(3)
         goal_count = 0
-
-        self.home_odometry = None
 
         goal_pred_x = []
         goal_pred_y = []
         goal_pred_z = []
-
-        prev_odom = self.odometry[:2]
-
-        keypressed_index = None
-        in_image_x = False
-
-        height_pred_buffers = deque(maxlen=10)
-        lower_shelf_preds, top_shelf_preds = 0, 0
-        fixed_height = None
-        SECOND_SHELF_Z = 0.69
-        TOP_SHELF_Z = 0.89
-
-        prev_odom = self.buffer.lookup_transform("odom", "base_link", rospy.Time())
-
-        prev_x = prev_odom.transform.translation.x
-        prev_y = prev_odom.transform.translation.y
-        prev_z = prev_odom.transform.translation.z
-
-        self.prev_odom = np.array([prev_x, prev_y, prev_z])
-
-        # listener = tf.TransformListener()
-        # from_frame_rel = "centered_base_link"
-        # to_frame_rel = "link_grasp_center"
-        # while step < 500 and not rospy.is_shutdown():
-        self.time = time.time()
+        goal_pred_med = []
         while not rospy.is_shutdown():
-            # while (
-            #     self.goal_pos_pred is None
-            #     or self.pick_prompt != prompt
-            #     and not rospy.is_shutdown()
-            # ):
-            #     # TODO: should be cleaner way of doing this with service
-            self.pick_prompt_publisher.publish(prompt)
-            print(f"{self.goal_pos_pred=}")
-
             if (
-                self.joint_states_data is not None
+                self.joint_states is not None
                 and self.goal_pos_pred is not None
                 and self.head_image is not None
                 and self.odometry is not None
-            ):
-                # step += 1
-
-                # continue
-                # fixed goal pred
-                # print(f"FIXED GOAL: {fixed_goal}")
-                # curr_odom = self.odometry[:2]
-                # change = curr_odom - prev_odom
-                # prev_odom = deepcopy(curr_odom)
-                # if fixed_goal is not None and in_image_x:
+            ):  # fixed goal pred
+                # if fixed_goal is not None:
                 #     self.goal_pos_pred = deepcopy(fixed_goal)
-
-                #     self.goal_pos_pred[:2] -= change
-                #     print("-" * 80)
+                #     self.goal_pos_pred[:2] -= self.odometry[:2]
                 # else:
-                #     fixed_goal = deepcopy(self.goal_pos_pred)
-                #     # fixed_goal[:2] -= self.odometry[:2]
+                #     self.goal_pos_pred[:2] -= self.odometry[:2]
+                #     self.goal_pos_pred[1] += 0.17  # 0.17
+                #     self.goal_pos_pred[0] += 0.03
+                #     fixed_goal = self.goal_pos_pred
 
-                if (
-                    self.joint_states_data is not None
-                    and len(self.joint_states_data.size()) <= 1
-                ):
-                    print("HERE")
-                    # print(self.joint_states_data)
+                # if len(avg_goal_lst) < 10:
+                #     self.goal_pos_pred[:2] -= self.odometry[:2]
+                #     self.goal_pos_pred[1] += 0.17 # 0.17
+                #     self.goal_pos_pred[0] += 0.03
+                #     avg_goal_lst.append(deepcopy(self.goal_pos_pred))
+                #     rate.sleep()
+                # else:
+                #     fixed_goal = sum(avg_goal_lst) / 3
+                #     self.goal_pos_pred = deepcopy(fixed_goal)
+                #     self.goal_pos_pred[:2] -= self.odometry[:2]
+
+                # avg goal pred
+                print(f"{step=}")
+                print(f"{self.goal_pos_pred=}")
+
+                # total_goal = total_goal + self.goal_pos_pred.numpy()
+                # goal_pred = total_goal / goal_count
+
+                # goal_pred_x.append(self.goal_pos_pred.numpy()[0].copy())
+                # goal_pred_y.append(self.goal_pos_pred.numpy()[1].copy())
+                # goal_pred_z.append(self.goal_pos_pred.numpy()[2].copy())
+
+                # goal_pred_med.append(self.goal_pos_pred.numpy().copy())
+
+                if len(self.joint_states_data.size()) <= 1:
+                    print(self.joint_states_data)
                     continue
 
-                # print("-" * 80)
+                # print(f"joint state shape:  {self.joint_states_data.shape}")
 
-                try:
-                    gripper_finger_right = self.buffer.lookup_transform(
-                        "base_link", "link_gripper_fingertip_right", rospy.Time()
+                print("-" * 80)
+                # print(f"Current goal position: {self.goal_tensor}")
+
+                # create current end-effector
+
+                joint_pos = self.joint_states.position
+                lift_idx, wrist_idx, yaw_idx = (
+                    self.joint_states.name.index("joint_lift"),
+                    self.joint_states.name.index("wrist_extension"),
+                    self.joint_states.name.index("joint_wrist_yaw"),
+                )
+
+                js_data = [
+                    (x, y)
+                    for (x, y) in zip(
+                        self.joint_states.name, self.joint_states.position
                     )
-                    gripper_finger_left = self.buffer.lookup_transform(
-                        "base_link", "link_gripper_fingertip_left", rospy.Time()
-                    )
-                except (
-                    tf2_ros.LookupException,
-                    tf2_ros.ConnectivityException,
-                    tf2_ros.ExtrapolationException,
-                ) as e:
-                    print(e)
-                    continue
+                ]
+                js_data.sort(key=lambda x: x[0])
+                js_data = [x[1] for x in js_data]
+                js_data = torch.tensor(js_data).unsqueeze(0)
 
                 end_eff_tensor = torch.Tensor(
-                    [
-                        (
-                            gripper_finger_left.transform.translation.x
-                            + gripper_finger_right.transform.translation.x
-                        )
-                        / 2,
-                        (
-                            gripper_finger_left.transform.translation.y
-                            + gripper_finger_right.transform.translation.y
-                        )
-                        / 2,
-                        (
-                            gripper_finger_left.transform.translation.z
-                            + gripper_finger_right.transform.translation.z
-                        )
-                        / 2,
+                    self.end_eff_to_xyz(
+                        [
+                            joint_pos[wrist_idx],
+                            joint_pos[yaw_idx],
+                            joint_pos[lift_idx],
+                            self.odometry[0],
+                            self.odometry[1],
+                            self.odometry[2],
+                        ]
+                    )
+                )
+
+                # goal_pred = np.median(np.array(goal_pred_med), axis=0)
+                # goal_pred = torch.from_numpy(goal_pred).to(self.device)
+                # goal_pred = self.goal_pos_pred
+
+                # goal_pred[-1] = 0.64 if goal_pred[-1].item() < 0.77 else 0.83
+                # goal_pred[-1] = 0.83
+                # print(f"pred goal pos: {goal_pred}")
+
+                # goal_tensors.append(goal_pred)
+                end_eff_tensors.append(end_eff_tensor)
+
+                # print(f"goal tensor:  {goal_pred}")
+                print(f"Current EE pos: {end_eff_tensor}")
+
+                # pred_gy = goal_pos_tensor[1]
+                # curr_gy = end_eff_tensor[1]
+                # if use_fixed == False:
+                #     fixed_goal_pos_tensor = goal_pos_tensor
+                #     use_fixed = True
+                #     print("Using Fixed")
+                if initial_pos is None:
+                    initial_pos = [
+                        joint_pos[wrist_idx],
+                        joint_pos[yaw_idx],
+                        joint_pos[lift_idx],
+                        self.odometry[0],
+                        self.odometry[1],
+                        self.odometry[2],
                     ]
-                )
 
-                # end_eff_tensor[0] -= 0.01
-                # end_eff_tensor[1] -= 0.01
+                # in_z = np.abs(goal_pred[2] - end_eff_tensor[2]) < 0.025
+                # in_y = np.abs(goal_pred[1] - end_eff_tensor[1]) < 0.015
+                # in_x = np.abs(goal_pred[2] - end_eff_tensor[2]) < 0.012
 
-                curr_odom = self.buffer.lookup_transform(
-                    "odom", "base_link", rospy.Time()
-                )
-
-                curr_x = curr_odom.transform.translation.x
-                curr_y = curr_odom.transform.translation.y
-                curr_z = curr_odom.transform.translation.z
-
-                self.curr_odom = np.array([curr_x, curr_y, curr_z])
-
-                change = self.curr_odom - self.prev_odom
-                # print(f"{change=}")
-                local_goal_pos = deepcopy(self.goal_pos_pred)
-
-                local_goal_pos = local_goal_pos + change
-                # local_goal_pos = deepcopy(fixed_goal)
-                # @NAT: add any offsets here
-                local_goal_pos[0] = -(local_goal_pos[0])
-                local_goal_pos[1] = -(local_goal_pos[1] + 0.03)  # 0.17
-                # local_goal_pos[2] += 0.05
-                # local_goal_pos[2] = (
-                #     SECOND_SHELF_Z if local_goal_pos[-1].item() < 0.78 else TOP_SHELF_Z
-                # )
-
-                # if robot predicts 10 top shelf, go top. else go bottom
-
-                # if local_goal_pos[2] == SECOND_SHELF_Z:
-                #     height_pred_buffers.append(SECOND_SHELF_Z)
-                # elif local_goal_pos[2] == TOP_SHELF_Z:
-                #     height_pred_buffers.append(TOP_SHELF_Z)
-                # local_goal_pos[2] = self._find_mode(height_pred_buffers)
-                # print(height_pred_buffers)
-                # print(local_goal_pos[2])
-
-                # if "mustard" in prompt.lower():
-                #     local_goal_pos[2] = SECOND_SHELF_Z
-                #     # SECOND_SHELF_Z
-                # elif "relish" in prompt.lower():
-                #     local_goal_pos[2] = TOP_SHELF_Z
-
-                # goal_tensors.append(local_goal_pos)
-                # end_eff_tensors.append(end_eff_tensor)
-
+                # in_circle = np.linalg.norm(goal_pred[:2] - end_eff_tensor[:2]) < 0.032
                 # print(
-                #     f"{trans.transform.translation.x}, {trans.transform.translation.y}, {trans.transform.translation.z}"
+                #     f"Distance to goal: {np.linalg.norm(goal_pred[:2] - end_eff_tensor[:2])}"
                 # )
-
-                point = PointStamped()
-                point.header.frame_id = "base_link"
-                point.point.x = local_goal_pos[0]
-                point.point.y = local_goal_pos[1]
-                point.point.z = local_goal_pos[2]
-                self.goal_point_publisher.publish(point)
-                print(f"Pred: {local_goal_pos=}")
-
-                point = PointStamped()
-                point.header.frame_id = "base_link"
-                point.point.x = end_eff_tensor[0]
-                point.point.y = end_eff_tensor[1]
-                point.point.z = end_eff_tensor[2]
-                self.curr_ee_ps_publisher.publish(point)
-                print(f"Curr: {end_eff_tensor=}")
-
-                # print(f"goal tensor:  {local_goal_pos}")
-                # print(f"Current EE pos: {end_eff_tensor}")
-
-                # step = 50
-                # step += 1
-                # if step <= 20:
-                #     # drop first 15 to stabilize
-                #     continue
-                # print(f"{point=}")
-                # print()
-                # continue
-                local_goal_pos[:2] = -local_goal_pos[:2]
-                end_eff_tensor[:2] = -end_eff_tensor[:2]
-                in_z = np.abs(local_goal_pos[2] - end_eff_tensor[2]) < 0.018
-                deep_y = (end_eff_tensor[1] - local_goal_pos[1] >= 0.001) and (
-                    end_eff_tensor[1] - local_goal_pos[1]
-                ) <= 0.024
-                in_y = (
-                    np.abs(end_eff_tensor[1] - local_goal_pos[1]) < 0.001
-                ) or deep_y  # 0.01
-                in_x = np.abs(local_goal_pos[0] - end_eff_tensor[0]) < 0.012  # 0.012
-                in_image_x = (
-                    np.abs(local_goal_pos[0] - end_eff_tensor[0]) < 0.1
-                )  # 0.012
-                full_extend = self.joint_states.position[wrist_idx] > 0.20
-
+                # in_circle = False
+                # in_half_circle = self.is_point_in_half_circle(
+                #     joint_pos[yaw_idx], goal_pred[:2], 0.032, end_eff_tensor[:2]
+                # )
                 joint_eff = self.joint_states.effort
                 wrist_yaw_eff_idx = self.joint_states.name.index("joint_wrist_roll")
                 wrist_yaw_eff = joint_eff[wrist_yaw_eff_idx]
                 yaw_eff = 0
                 if yaw_eff > 0 or np.abs(wrist_yaw_eff) > 1e-4:
                     yaw_eff += 1
-
-                print(f"{in_x=}, {in_y=}, {in_z=}, {yaw_eff=}, {full_extend=}")
-                # if (in_circle or yaw_eff >= 1) and in_z:
-                if (in_z and in_y and in_x) or yaw_eff >= 2:
+                # yaw_eff = 0 # Remove this for ramming
+                # print(f"{in_circle=}, {in_half_circle=}, {in_z}")
+                # if (in_circle or in_half_circle or yaw_eff >= 1) and in_z:
+                if yaw_eff >= 2:
+                    print(f"{yaw_eff=}")
                     # print(f"{in_circle=}")
                     # print(f"{in_half_circle=}")
                     print("Got to goal!!")
-                    self.close_grip()
+                    self.grasp_primitive()
                     self.lift_arm_primitive()
                     break
 
-                print(f"{end_eff_tensor=}")
-                print(f"{local_goal_pos=}")
+                # inp = goal_pred - end_eff_tensor
+                # inp = inp.to(torch.float32)
 
-                inp = local_goal_pos - end_eff_tensor
-                # inp[0] = -inp[0]
-                # inp[1] = -inp[1]
-                # inp = torch.cat((inp,torch.tensor([self.odometry[2]])),dim=0)
+                # _pos = (goal_pred - end_eff_tensor).cpu().numpy()
+                # print(f"pos: {_pos}")
+                # onpolicy_pos.append(_pos)
+                # onpolicy_kp.append(self.goal_pos_pred)
 
-                inp = inp.to(torch.float32)
-
-                start = time.time()
-                print(f"Input to model {inp}")
-                prediction = self.model_ppo(inp)
-                print(f"{prediction=}")
-                print(f"ppo: {time.time() - start}")
-                times.append(time.time() - start)
-
-                keypressed_index = torch.argmax(prediction).item()
-                keypressed = kp_reduced_mapping[keypressed_index]
-                keypressed = self.index_to_keypressed(keypressed)
-
-                _pos = (local_goal_pos - end_eff_tensor).cpu().numpy()
-                print(f"pos: {_pos}")
-                onpolicy_pos.append(_pos)
-                onpolicy_kp.append(keypressed_index)
-
-                if keypressed == "_":
+                if self.goal_pos_pred == "_":
                     # noop
                     print("NOOP")
                     continue
 
-                command = self.get_command(keypressed)
+                command = self.get_command(self.goal_pos_pred)
 
-                print(f"{rospy.Time().now()}, {keypressed_index=}, {command=}")
+                print(f"{rospy.Time().now()}, {command=}")
                 self.send_command(command)
 
-            if keypressed_index is not None:
-                if keypressed_index > 5:
-                    # rate.sleep()
-                    rospy.sleep(2)
-                else:
-                    rate.sleep()
-            else:
-                rate.sleep()
-            print(f"time of loop = {time.time() - self.time}")
-            self.time = time.time()
+            rate.sleep()
 
-        # publish empty prompt to stop
-        # pick_prompt_msg.pick_prompt = None
-        # pick_prompt_msg.do_pick = False
-        self.pick_prompt_publisher.publish(prompt)
 
-        self.prev_odom = deepcopy(self.curr_odom)
+# Usage example:
+# decision_boundary(pts, labels, goal, "Decision Boundary", file=None, save_dir="temp")
 
 
 def get_args():
@@ -1323,6 +1257,6 @@ def get_args():
 
 
 if __name__ == "__main__":
-    node = HalSkillsNode()
+    node = HalSkills()
     # node.start()
     node.main()

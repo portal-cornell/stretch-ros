@@ -102,6 +102,14 @@ class HalSkills(hm.HelloNode):
         t1 = 1.0 - 2.0 * z * z
         return math.atan2(t0, t1)
 
+    def pc_callback(self, pc_msg):
+        try:
+            self.rgbd_image = self.cv_bridge.imgmsg_to_cv2(pc_msg, "bgr8")
+            self.head_image = self.img_transform(self.raw_head_image)
+            self.head_image = self.head_image.unsqueeze(0)
+        except CvBridgeError as error:
+            print(error)
+
     def odom_callback(self, msg):  # NOTE: callback to set odometry value
         pose = msg.pose.pose
         raw_odometry = [
@@ -219,9 +227,7 @@ class HalSkills(hm.HelloNode):
         self.curr_ee_ps_publisher = rospy.Publisher(
             "hal_skills_final/curr_ee_ps", PointStamped, queue_size=10
         )
-        self.shifted_ps_publisher = rospy.Publisher(
-            "hal_skills_final/shifted_ps", PointStamped, queue_size=10
-        )
+
         self.buffer = tf2_ros.Buffer()
         self.listener = tf2_ros.TransformListener(self.buffer)
 
@@ -248,10 +254,10 @@ class HalSkills(hm.HelloNode):
 
                 try:
                     gripper_finger_right = self.buffer.lookup_transform(
-                        "odom", "link_gripper_fingertip_right", rospy.Time()
+                        "base_link", "link_gripper_fingertip_right", rospy.Time()
                     )
                     gripper_finger_left = self.buffer.lookup_transform(
-                        "odom", "link_gripper_fingertip_left", rospy.Time()
+                        "base_link", "link_gripper_fingertip_left", rospy.Time()
                     )
                 except (
                     tf2_ros.LookupException,
@@ -271,12 +277,7 @@ class HalSkills(hm.HelloNode):
                             + gripper_finger_right.transform.translation.x
                         )
                         / 2,
-                        # gripper_finger_left.transform.translation.y,
-                        (
-                            gripper_finger_left.transform.translation.y
-                            + gripper_finger_right.transform.translation.y
-                        )
-                        / 2,
+                        gripper_finger_left.transform.translation.y,
                         gripper_finger_left.transform.translation.z,
                     ]
                 )
@@ -288,26 +289,6 @@ class HalSkills(hm.HelloNode):
                 point.point.z = end_eff_tensor[2]
                 self.curr_ee_ps_publisher.publish(point)
                 print(f"Curr: {end_eff_tensor=}")
-
-                joint_pos = self.joint_states.position
-                lift_idx, wrist_idx, yaw_idx = (
-                    self.joint_states.name.index("joint_lift"),
-                    self.joint_states.name.index("wrist_extension"),
-                    self.joint_states.name.index("joint_wrist_yaw"),
-                )
-                wrist_angle = joint_pos[yaw_idx]
-
-                hyp = 0.06 * math.sqrt(2)
-
-                end_eff_tensor[0] -= 0.01
-                end_eff_tensor[1] -= 0.01
-                point = PointStamped()
-                point.header.frame_id = "odom"
-                point.point.x = end_eff_tensor[0]
-                point.point.y = end_eff_tensor[1]
-                point.point.z = end_eff_tensor[2]
-                self.shifted_ps_publisher.publish(point)
-                print(f"shifted: {end_eff_tensor=}")
 
                 rate.sleep()
 

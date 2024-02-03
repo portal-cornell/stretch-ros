@@ -9,7 +9,8 @@ import tf2_ros
 import time
 
 # ppo fixed
-from hal_skills_final import HalSkillsNode
+# from hal_skills_final import HalSkillsNode
+from hal_skills_ppo_eval import HalSkillsNode
 
 # ppo full
 # from hal_skills_final_odom import HalSkillsNode
@@ -26,14 +27,15 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # pantry_ketchup = (2.72585, 0.90955, math.pi / 2)
 # pantry = pantry_mustard
 # pantry = (2.83585, 1.08955, math.pi / 2)  # actual pantry pos
-PANTRY_LOC = [2.80, 1.05, math.pi / 2]
+# PANTRY_LOC = [2.80, 1.05, math.pi / 2]
+PANTRY_LOC = [2.805, 1.05, math.pi / 2]
 SHELF_LOC = [1.55, 0.1, 0]
 # pantry = (2.00585, 0.96955, math.pi / 2)# experimentation
 BETWEEN_TABLE_PANTRY_LOC = (2.0, 1.2, -math.pi / 4)
 TABLE_LOC = (1.55, 2.01, math.pi)
 HOME_LOC = (0.1, 0, 0)
 
-TABLE_HEIGHT = 0.98  # arbitrary table height
+TABLE_HEIGHT = 0.97  # arbitrary table height
 TABLE_WRIST_EXT = 0.4
 SHELF_HEIGHT = 0.80
 # skill status
@@ -72,11 +74,14 @@ class Hal(hm.HelloNode):
         reset parameter defaults to False: when False, Hal will reset its arm and execute policy assuming it's already in reset position
         """
         prompt = prompt.lower()
-        if "mustard" in prompt:
-            prompt = "yellow mustard"
-        elif "reslish" in prompt:
-            prompt = "dill relish"
-
+        # if "mustard" in prompt:
+        #     prompt = "yellow mustard"
+        # elif "relish" in prompt:
+        #     prompt = "dill relish"
+        # elif "ketchup" in prompt:
+        #     prompt = "relish"
+        # elif "pepper" in prompt:
+        #     prompt = "relish"
         self.hal_skills.main(reset=reset, prompt=prompt)
 
     def spin_towards_goal(self, goal_loc):
@@ -217,14 +222,18 @@ class Hal(hm.HelloNode):
     def move_arm_pick_pantry(self):
         rospy.loginfo("Set arm")
         self.pick_starting_height = 0.998
+        while self.hal_skills.joint_states is None:
+            rospy.sleep(1)
         self.joint_lift_index = self.hal_skills.joint_states.name.index("joint_lift")
         pose = {
-            "wrist_extension": 0.01,
+            "wrist_extension": 0.05,
             "joint_lift": self.pick_starting_height - 0.45,  # for cabinet -0.175
-            "joint_wrist_pitch": 0.2,
-            "joint_wrist_yaw": -0.09,
+            "joint_wrist_pitch": 0.0,
+            "joint_wrist_yaw": 0.0,
+            # "joint_wrist_pitch": 0.2,
+            # "joint_wrist_yaw": -0.09,
         }
-        self.base_gripper_yaw = -0.09
+        # self.base_gripper_yaw = -0.09
         self.gripper_len = 0.22
         self.move_to_pose(pose)
         return True
@@ -244,14 +253,14 @@ class Hal(hm.HelloNode):
 
         print("in pick pantry initial config")
         while not done_head_pan:
-            if self.hal_skills.joint_states:
+            if self.hal_skills.joint_states is not None:
                 print("got joint states")
                 done_head_pan = self.move_head_pick_pantry()
             rate.sleep()
         print("done with head pan")
         done_initial_config = False
         while not done_initial_config:
-            if self.hal_skills.joint_states:
+            if self.hal_skills.joint_states is not None:
                 done_initial_config = self.move_arm_pick_pantry()
             rate.sleep()
         print("done with  move arm")
@@ -265,10 +274,12 @@ class Hal(hm.HelloNode):
         # retract arm and go to height
         rospy.loginfo("Retract arm")
         pose = {
-            "wrist_extension": 0.01,
+            "wrist_extension": 0.05,
             "joint_lift": 1.0,  # for cabinet -0.175
-            "joint_wrist_pitch": 0.2,
-            "joint_wrist_yaw": -0.09,
+            "joint_wrist_pitch": 0.0,
+            "joint_wrist_yaw": 0.0,
+            # "joint_wrist_pitch": 0.2,
+            # "joint_wrist_yaw": -0.09,
         }
         self.move_to_pose(pose)
 
@@ -277,7 +288,7 @@ class Hal(hm.HelloNode):
         resp = s()
         print(resp)
         pose = {
-            "wrist_extension": 0.01,
+            "wrist_extension": 0.05,
         }
         self.move_to_pose(pose)
         rospy.loginfo("Retract arm")
@@ -297,24 +308,26 @@ class Hal(hm.HelloNode):
         self.move_to_pose(pose)
         self.hal_skills.open_grip()
         # retract wrist
-        self.retract_arm_primitive()
+        # self.retract_arm_primitive()
         self.action_status = SUCCESS
 
     def move_shelf(self):
         s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
         resp = s()
+        # rospy.set_param("/move_base/TrajectoryPlannerROS/xy_goal_tolerance", 0.10)
         self.nav.go_to(SHELF_LOC, self.move_shelf_callback)
 
     def place_shelf(self):
         s = rospy.ServiceProxy("/switch_to_position_mode", Trigger)
         resp = s()
         pose = {
-            "wrist_extension": TABLE_WRIST_EXT - 0.1,
+            "wrist_extension": TABLE_WRIST_EXT,
             "joint_lift": SHELF_HEIGHT,
         }
         self.move_to_pose(pose)
-        rospy.sleep(1.0)
+        time.sleep(2.5)
         self.hal_skills.open_grip()
+        self.retract_arm_primitive()
 
     def move_shelf_callback(self, status, result):
         print("at shelf")
@@ -325,11 +338,14 @@ class Hal(hm.HelloNode):
         s = rospy.ServiceProxy("/switch_to_position_mode", Trigger)
         resp = s()
         pose = {
-            "joint_wrist_yaw": -0.09,
-            "joint_wrist_pitch": 0.2,
+            "joint_wrist_pitch": 0.0,
+            "joint_wrist_yaw": 0.0,
+            # "joint_wrist_yaw": -0.09,
+            # "joint_wrist_pitch": 0.2,
         }
+        self.hal_skills.close_grip()
         self.move_to_pose(pose)
-        self.hal_skills.handover(object)
+        # self.hal_skills.handover(object)
         self.retract_arm_primitive()
 
 
