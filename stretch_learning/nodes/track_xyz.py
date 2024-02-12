@@ -158,31 +158,17 @@ class HalSkills(hm.HelloNode):
         extension = joint_state[0]
         yaw = joint_state[1]
         lift = joint_state[2]
-        base_x = joint_state[3]
-        base_y = joint_state[4]
-        base_angle = joint_state[5]
 
-        gripper_len = 0.27
+        gripper_len = 0.23
         base_gripper_yaw = -0.09
 
-        # find cx, cy in base frame
-        point = (0.03, 0.17)
-        pivot = (0, 0)
-        cx, cy = self.rotate_odom(point, base_angle, pivot)
-
-        # cx, cy in origin frame
-        cx += base_x
-        cy += base_y
-
-        extension_y_offset = extension * np.cos(base_angle)
-        extension_x_offset = extension * -np.sin(base_angle)
         yaw_delta = yaw - base_gripper_yaw
-        gripper_y_offset = gripper_len * np.cos(yaw_delta + base_angle)
-        gripper_x_offset = gripper_len * -np.sin(yaw_delta + base_angle)
+        gripper_y_offset = gripper_len * np.cos(yaw_delta)
+        gripper_x_offset = gripper_len * -np.sin(yaw_delta)
 
-        x = cx + extension_x_offset + gripper_x_offset
-        y = cy + extension_y_offset + gripper_y_offset
-        z = lift
+        x = gripper_x_offset + 0.064
+        y = gripper_y_offset + extension + 0.1822
+        z = lift + 0.111
 
         return np.array([x.item(), y.item(), z])
 
@@ -219,6 +205,9 @@ class HalSkills(hm.HelloNode):
         self.curr_ee_ps_publisher = rospy.Publisher(
             "hal_skills_final/curr_ee_ps", PointStamped, queue_size=10
         )
+        self.curr_ee_ps_ref_publisher = rospy.Publisher(
+            "hal_skills_final/curr_ee_ps_ref", PointStamped, queue_size=10
+        )
         self.shifted_ps_publisher = rospy.Publisher(
             "hal_skills_final/shifted_ps", PointStamped, queue_size=10
         )
@@ -246,13 +235,36 @@ class HalSkills(hm.HelloNode):
             if self.joint_states is not None and self.odometry is not None:
                 print("-" * 80)
 
+                joint_pos = self.joint_states.position
+                lift_idx, wrist_idx, yaw_idx = (
+                    self.joint_states.name.index("joint_lift"),
+                    self.joint_states.name.index("wrist_extension"),
+                    self.joint_states.name.index("joint_wrist_yaw"),
+                )
+                end_eff_tensor = torch.Tensor(
+                    self.new_end_eff_to_xyz(
+                        [
+                            joint_pos[wrist_idx],
+                            joint_pos[yaw_idx],
+                            joint_pos[lift_idx],
+                        ]
+                    )
+                )
+                print(end_eff_tensor)
+
                 try:
                     gripper_finger_right = self.buffer.lookup_transform(
-                        "odom", "link_gripper_fingertip_right", rospy.Time()
+                        "base_link", "link_gripper_fingertip_right", rospy.Time()
                     )
                     gripper_finger_left = self.buffer.lookup_transform(
-                        "odom", "link_gripper_fingertip_left", rospy.Time()
+                        "base_link", "link_gripper_fingertip_left", rospy.Time()
                     )
+                    # odom = self.buffer.lookup_transform(
+                    #     "base_link", "link_mast", rospy.Time()
+                    # )
+                    # gripper_finger_left = self.buffer.lookup_transform(
+                    #     "base_link", "link_gripper_fingertip_left", rospy.Time()
+                    # )
                 except (
                     tf2_ros.LookupException,
                     tf2_ros.ConnectivityException,
@@ -261,7 +273,7 @@ class HalSkills(hm.HelloNode):
                     print(e)
                     continue
 
-                end_eff_tensor = torch.Tensor(
+                end_eff_tensor_ref = torch.Tensor(
                     [
                         # trans.transform.translation.x - 0.09,
                         # trans.transform.translation.y - 0.05,
@@ -280,14 +292,33 @@ class HalSkills(hm.HelloNode):
                         gripper_finger_left.transform.translation.z,
                     ]
                 )
+                point = PointStamped()
+                point.header.frame_id = "base_link"
+                point.point.x = end_eff_tensor_ref[0]
+                point.point.y = end_eff_tensor_ref[1]
+                point.point.z = end_eff_tensor_ref[2]
+                self.curr_ee_ps_ref_publisher.publish(point)
+                # end_eff_odom = torch.Tensor(
+                #     [
+                #         # trans.transform.translation.x - 0.09,
+                #         # trans.transform.translation.y - 0.05,
+                #         # trans.transform.translation.z - 0.06,
+                #         odom.transform.translation.x,
+                #         # gripper_finger_left.transform.translation.y,
+                #         odom.transform.translation.y,
+                #         odom.transform.translation.z,
+                #     ]
+                # )
+                # print(end_eff_odom)
 
                 point = PointStamped()
-                point.header.frame_id = "odom"
-                point.point.x = end_eff_tensor[0]
-                point.point.y = end_eff_tensor[1]
+                point.header.frame_id = "base_link"
+                point.point.x = -end_eff_tensor[0]
+                point.point.y = -end_eff_tensor[1]
                 point.point.z = end_eff_tensor[2]
                 self.curr_ee_ps_publisher.publish(point)
-                print(f"Curr: {end_eff_tensor=}")
+                # print(f"Curr: {end_eff_tensor=}")
+                # print(end_eff_odom)
 
                 joint_pos = self.joint_states.position
                 lift_idx, wrist_idx, yaw_idx = (
@@ -299,17 +330,7 @@ class HalSkills(hm.HelloNode):
 
                 hyp = 0.06 * math.sqrt(2)
 
-                end_eff_tensor[0] -= 0.01
-                end_eff_tensor[1] -= 0.01
-                point = PointStamped()
-                point.header.frame_id = "odom"
-                point.point.x = end_eff_tensor[0]
-                point.point.y = end_eff_tensor[1]
-                point.point.z = end_eff_tensor[2]
-                self.shifted_ps_publisher.publish(point)
-                print(f"shifted: {end_eff_tensor=}")
-
-                rate.sleep()
+                # rate.sleep()
 
                 # joint_pos = self.joint_states.position
                 # lift_idx, wrist_idx, yaw_idx = (

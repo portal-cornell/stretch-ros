@@ -42,7 +42,6 @@ class HalSkillsNode(hm.HelloNode):
     def __init__(self):
         hm.HelloNode.__init__(self)
         self.debug_mode = False
-        self.rate = 10.0
         self.trajectory_client = actionlib.SimpleActionClient(
             "/stretch_controller/follow_joint_trajectory", FollowJointTrajectoryAction
         )
@@ -57,9 +56,13 @@ class HalSkillsNode(hm.HelloNode):
             "/stretch/joint_states", JointState, self.joint_states_callback
         )
 
-        self.publisher = rospy.Publisher('/amcl_pose', data_class=PoseWithCovarianceStamped, queue_size=1)
+        self.publisher = rospy.Publisher(
+            "/amcl_pose", data_class=PoseWithCovarianceStamped, queue_size=1
+        )
 
         self.init_node()
+        self.rate = 10.0
+        self.rosrate = rospy.Rate(self.rate)
 
     def init_node(self):
         rospy.init_node("hal_skills_node")
@@ -89,7 +92,7 @@ class HalSkillsNode(hm.HelloNode):
             "joint_lift": self.pick_starting_height - 0.45,  # for cabinet -0.175
             "joint_wrist_pitch": 0.0,
             "joint_wrist_yaw": 0.0,
-            # "joint_wrist_pitch": 0.2,
+            "joint_wrist_roll": 0.0,
             # "joint_wrist_yaw": -0.09,
         }
         self.base_gripper_yaw = -0.09
@@ -131,33 +134,73 @@ class HalSkillsNode(hm.HelloNode):
             rate.sleep()
         self.open_grip()
 
-    @torch.no_grad()
+    def reset_pick_pantry(self):
+        print("start of reseting pick pantry")
+        self.pick_pantry_initial_config(self.rosrate)
+
+    def reset_pick_bowl(self):
+        pose_sequence = [
+            {
+                "wrist_extension": 0.05,
+                "joint_gripper_finger_left": 0.22,
+                "joint_lift": 1.09,  # for cabinet -0.175
+                "joint_wrist_pitch": -0.56,
+                "joint_wrist_yaw": 0.0,
+                "joint_wrist_roll": 1.59,
+            },
+            {"wait": 1.0},
+            {"wrist_extension": 0.24},
+            {"wait": 1.0},
+            {
+                "joint_gripper_finger_left": 0.10715,
+                # "joint_gripper_finger_right": 0.10715,
+            },
+            {"wait": 1.0},
+            {"joint_wrist_pitch": -0.807},
+            {"wait": 1.0},
+            {
+                "joint_gripper_finger_left": -0.105,
+                # "joint_gripper_finger_right": -0.105,
+            },
+            {"wait": 1.0},
+        ]
+
+        for pose in pose_sequence:
+            if "wait" in pose:
+                rospy.sleep(pose["wait"])
+            else:
+                self.move_to_pose(pose)
+
+        return True
+
     def main(self):
         print("start of main")
+        rate = rospy.Rate(self.rate)
 
         print("switching to position mode")
         s = rospy.ServiceProxy("/switch_to_position_mode", Trigger)
         resp = s()
         print(resp)
 
-        rate = rospy.Rate(self.rate)
-
         print("start of reset")
 
         self.pick_pantry_initial_config(rate)
 
-    def publishing(self): 
+    def publishing(self):
         message = PoseWithCovarianceStamped()
-        message.pose.pose.position.x = 2.815 
-        message.pose.pose.position.y = 1.05 
+        message.pose.pose.position.x = 2.815
+        message.pose.pose.position.y = 1.05
         message.pose.pose.orientation.z = 0.707
         message.pose.pose.orientation.w = 0.707
-        
-        message._md5sum = '953b798c0f514ff060a53a3498ce6246'
-        print('here')
-        self.publisher.publish(message) 
+
+        message._md5sum = "953b798c0f514ff060a53a3498ce6246"
+        print("here")
+        self.publisher.publish(message)
+
 
 if __name__ == "__main__":
     node = HalSkillsNode()
-    # node.publishing()
     node.main()
+    # node.publishing()
+    # node.reset_pick_bowl()
+    # node.reset_pick_pantry()

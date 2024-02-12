@@ -60,7 +60,7 @@ class Hal(hm.HelloNode):
         self.hal_skills = HalSkillsNode()
         self.hal_skills.subscribe()
 
-        self.nav = StretchNavigation()
+        # self.nav = StretchNavigation()
         self.rate = 10.0
         self.current_location = HOME_LOC
 
@@ -74,33 +74,9 @@ class Hal(hm.HelloNode):
         reset parameter defaults to False: when False, Hal will reset its arm and execute policy assuming it's already in reset position
         """
         prompt = prompt.lower()
-        # if "mustard" in prompt:
-        #     prompt = "yellow mustard"
-        # elif "relish" in prompt:
-        #     prompt = "dill relish"
-        # elif "ketchup" in prompt:
-        #     prompt = "relish"
-        # elif "pepper" in prompt:
-        #     prompt = "relish"
         self.hal_skills.main(reset=reset, prompt=prompt)
 
-    def spin_towards_goal(self, goal_loc):
-        """
-        spin robot so that it is in the direction of the goal
-        """
-        return
-        rospy.set_param("/move_base/TrajectoryPlannerROS/yaw_goal_tolerance", 0.20)
-        curr_x, curr_y, _ = self.current_location
-        goal_x, goal_y, _ = goal_loc
-        centerred_x, centerred_y = goal_x - curr_x, goal_y - curr_y
-        new_orientation = math.atan2(centerred_y, centerred_x)
-        print(f"Spinning towards {new_orientation}")
-        self.nav.go_to((curr_x, curr_y, new_orientation), self.orient_callback)
-
-    def orient_callback(self, status, result):
-        self.action_status = SUCCESS
-
-    def move_between_table_pantry_callback(self, status, result):
+    def move_between_table_pantry_callback(self):
         self.current_location = BETWEEN_TABLE_PANTRY_LOC
 
     def set_initial_move_params(self):
@@ -230,8 +206,6 @@ class Hal(hm.HelloNode):
             "joint_lift": self.pick_starting_height - 0.45,  # for cabinet -0.175
             "joint_wrist_pitch": 0.0,
             "joint_wrist_yaw": 0.0,
-            # "joint_wrist_pitch": 0.2,
-            # "joint_wrist_yaw": -0.09,
         }
         # self.base_gripper_yaw = -0.09
         self.gripper_len = 0.22
@@ -278,8 +252,6 @@ class Hal(hm.HelloNode):
             "joint_lift": 1.0,  # for cabinet -0.175
             "joint_wrist_pitch": 0.0,
             "joint_wrist_yaw": 0.0,
-            # "joint_wrist_pitch": 0.2,
-            # "joint_wrist_yaw": -0.09,
         }
         self.move_to_pose(pose)
 
@@ -311,6 +283,22 @@ class Hal(hm.HelloNode):
         # self.retract_arm_primitive()
         self.action_status = SUCCESS
 
+    def pick_table(self):
+        pose = {
+            "joint_lift": 0.935,
+        }
+        self.move_to_pose(pose)
+        time.sleep(0.5)
+        pose = {
+            "wrist_extension": 0.292,
+        }
+        time.sleep(0.5)
+        self.hal_skills.close_grip()
+        self.action_status = SUCCESS
+
+    def place_cart(self):
+        return
+
     def move_shelf(self):
         s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
         resp = s()
@@ -340,23 +328,12 @@ class Hal(hm.HelloNode):
         pose = {
             "joint_wrist_pitch": 0.0,
             "joint_wrist_yaw": 0.0,
-            # "joint_wrist_yaw": -0.09,
-            # "joint_wrist_pitch": 0.2,
         }
         self.hal_skills.close_grip()
         self.move_to_pose(pose)
-        # self.hal_skills.handover(object)
         self.retract_arm_primitive()
 
 
 if __name__ == "__main__":
     hal = Hal()
-    # hal.reset_pick_pantry()
-    # is_reset = True
-
-    # hal.move_pantry()
-    # rospy.sleep(2)
-    # hal.pick_goal(reset=False, prompt="kosher salt")
-    # hal.move_table()
-    # hal.place_table()
-    # exit()
+    

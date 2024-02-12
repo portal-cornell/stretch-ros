@@ -44,6 +44,7 @@ class TaskServer:
             "table": self.hal.place_table,
             "shelf": self.hal.place_shelf,
         }
+        print("init")
 
     def start(self):
         # start services
@@ -95,7 +96,7 @@ class TaskServer:
         if self.action_status == NOT_STARTED:
             # return HalPickResponse(SUCCESS)
             self.action_status = RUNNING
-            self.hal.reset_pick_pantry()
+            # self.hal.reset_pick_pantry()
             if hasattr(req, "object"):
                 self.hal.pick_goal(prompt=req.object.lower())
             else:
@@ -113,6 +114,35 @@ class TaskServer:
             return HalHandoverResponse(SUCCESS)
         return HalHandoverResponse(self.action_status)
 
+    def drop_obj(self):
+        pose_sequence = [
+            {
+                "joint_lift": 0.96,  # for cabinet -0.175
+            },
+            {"wait": 0.1},
+            {
+                "wrist_extension": 0.28,
+            },
+            {"wait": 0.1},
+            {
+                "joint_lift": 0.92,  # for cabinet -0.175
+            },
+            {"wait": 0.1},
+            {
+                "joint_gripper_finger_left": 0.22,
+            },
+        ]
+
+        for pose in pose_sequence:
+            if "wait" in pose:
+                rospy.sleep(pose["wait"])
+            else:
+                self.hal.move_to_pose(pose)
+        return True
+
+    def retract_for_move(self):
+        self.hal.retract_arm_primitive()
+
 
 if __name__ == "__main__":
 
@@ -125,20 +155,24 @@ if __name__ == "__main__":
 
     # exit()
     import sys
-    import subprocess
+
+    # import subprocess
 
     print("here")
     if sys.argv[1] == "1":
         print("1")
-        ts.handle_move("pantry")
-    else:
+        ts.handle_pick("red ketchup")
+    elif sys.argv[1] == "2":
         print("2")
-        # ts.handle_pick("Dill Relish")
-        ts.handle_move("table")
-        ts.handle_place("table")
-        time.sleep(5)
+        ts.handle_pick("chicken broth box")
+        #
+        # ts.handle_move("table")
+        # ts.handle_place("table")
+        # time.sleep(5)
 
-        ts.handle_handover(None)
-        ts.handle_move("shelf")
-        ts.hal.hal_skills.move_shelf_primitive()
-        ts.handle_place("shelf")
+        # ts.handle_handover(None)
+        # ts.handle_move("shelf")
+        # ts.hal.hal_skills.move_shelf_primitive()
+        # ts.handle_place("shelf")
+    else:
+        ts.drop_obj()

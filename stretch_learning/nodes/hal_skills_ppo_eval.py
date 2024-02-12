@@ -141,7 +141,7 @@ class HalSkillsNode(hm.HelloNode):
         self.small_translate = 0.005  # 0.02
         self.medium_deg = 6.0
         self.medium_rad = self.rad_per_deg * self.medium_deg * (3 / 5)
-        self.medium_translate = 0.03 * (3 / 5)
+        self.medium_translate = 0.02 * (3 / 5)
         self.mode = "position"  #'manipulation' #'navigation'
         # self.mode = "navigation"                              NOTE: changed frm  navigation to position, since navigation does not support base movement
 
@@ -158,13 +158,13 @@ class HalSkillsNode(hm.HelloNode):
         # self.goal_tensor = torch.Tensor(self.goal_pos).to(device)
 
         # pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_fixed_reduced.pth"
-        pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_base.pth"
-        # pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy.pth"
+        # pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy_base.pth"
+        pth_path = "/home/strech/catkin_ws/src/stretch_ros/stretch_learning/checkpoints/ppo_point_and_shoot/policy.pth"
         print("Loading PPO Agent")
         self.model = load_ppo_model(pth_path)
         self.model.eval()
 
-        self.rate = 10.0
+        self.rate = 50.0
 
         self.pick_prompt_publisher = rospy.Publisher(
             "/stretch/pick_prompt", String, queue_size=1
@@ -238,7 +238,7 @@ class HalSkillsNode(hm.HelloNode):
         self.odometry = self.odom_to_js(self.odometry)
 
     def joint_states_callback(self, msg):
-        self.joint_states = msg
+        self.joint_states = deepcopy(msg)
         js_msg = list(zip(msg.name, msg.position, msg.velocity, msg.effort))
         js_msg = sorted(js_msg, key=lambda x: x[0])
         js_arr = []
@@ -724,6 +724,23 @@ class HalSkillsNode(hm.HelloNode):
     #     odom_data[0] = deepcopy(odom_data[1]) * -1
     #     odom_data[1] = tmp
     #     return odom_data
+    def new_end_eff_to_xyz(self, joint_state):
+        extension = joint_state[0]
+        yaw = joint_state[1]
+        lift = joint_state[2]
+
+        gripper_len = 0.23
+        base_gripper_yaw = -0.09
+
+        yaw_delta = yaw - base_gripper_yaw
+        gripper_y_offset = gripper_len * np.cos(yaw_delta)
+        gripper_x_offset = gripper_len * -np.sin(yaw_delta)
+
+        x = gripper_x_offset + 0.064
+        y = gripper_y_offset + extension + 0.1822
+        z = lift + 0.111
+
+        return np.array([x.item(), y.item(), z])
 
     def end_eff_to_xyz(self, joint_state):
         extension = joint_state[0]
@@ -792,7 +809,7 @@ class HalSkillsNode(hm.HelloNode):
         )
 
     @torch.no_grad()
-    def main(self, reset=True, prompt=None):
+    def main(self, reset=False, prompt=None):
         # rospy.init_node("hal_skills_node")
         # self.node_name = rospy.get_name()
         # rospy.loginfo("{0} started".format(self.node_name))
@@ -821,8 +838,8 @@ class HalSkillsNode(hm.HelloNode):
         # self.lift_arm_primitive()
         rospy.sleep(1)
         print("start of reset")
-        if reset:
-            self.pick_pantry_initial_config(rate)
+        # if reset:
+        # self.pick_pantry_initial_config(rate)
         # rospy.sleep(1)
         print("start of loop")
         keypresses = []
@@ -882,6 +899,7 @@ class HalSkillsNode(hm.HelloNode):
         goal_pred_z = []
 
         keypressed_index = None
+        x_state = None
 
         height_pred_buffers = deque(maxlen=10)
         lower_shelf_preds, top_shelf_preds = 0, 0
@@ -909,10 +927,10 @@ class HalSkillsNode(hm.HelloNode):
                 # and self.odometry is not None
                 and self.goal_point is not None
             ):
-                
+
                 step += 1
 
-                if fixed_goal is not None and step > 10:
+                if fixed_goal is not None and step > 4:
                     self.goal_point = deepcopy(fixed_goal)
                     # self.goal_pos_pred[:2] -= self.odometry[:2]
                     print("-" * 80)
@@ -935,44 +953,64 @@ class HalSkillsNode(hm.HelloNode):
                 #     print("HERE")
                 #     # print(self.joint_states_data)
                 #     continue
-
-                # print("-" * 80)
+                print(prompt)
+                self.pick_prompt_publisher.publish(prompt)
+                print("-" * 80)
                 joint_pos = self.joint_states.position
                 lift_idx, wrist_idx, yaw_idx = (
                     self.joint_states.name.index("joint_lift"),
                     self.joint_states.name.index("wrist_extension"),
                     self.joint_states.name.index("joint_wrist_yaw"),
                 )
-
-                try:
-                    gripper_finger_right = self.buffer.lookup_transform(
-                        "base_link", "link_gripper_fingertip_right", rospy.Time()
-                    )
-                    gripper_finger_left = self.buffer.lookup_transform(
-                        "base_link", "link_gripper_fingertip_left", rospy.Time()
-                    )
-                except (
-                    tf2_ros.LookupException,
-                    tf2_ros.ConnectivityException,
-                    tf2_ros.ExtrapolationException,
-                ) as e:
-                    print(e)
-                    continue
-
                 end_eff_tensor = torch.Tensor(
-                    [
-                        # trans.transform.translation.x - 0.09,
-                        # trans.transform.translation.y - 0.05,
-                        # trans.transform.translation.z - 0.06,
-                        (
-                            gripper_finger_left.transform.translation.x
-                            + gripper_finger_right.transform.translation.x
-                        )
-                        / 2,
-                        gripper_finger_left.transform.translation.y,
-                        gripper_finger_left.transform.translation.z,
-                    ]
+                    self.new_end_eff_to_xyz(
+                        [
+                            joint_pos[wrist_idx],
+                            joint_pos[yaw_idx],
+                            joint_pos[lift_idx],
+                        ]
+                    )
                 )
+
+                # try:
+                #     gripper_finger_right = self.buffer.lookup_transform(
+                #         "base_link",
+                #         "link_gripper_fingertip_right",
+                #         rospy.Time(0),
+                #         rospy.Duration(0.1),
+                #     )
+                #     gripper_finger_left = self.buffer.lookup_transform(
+                #         "base_link",
+                #         "link_gripper_fingertip_left",
+                #         rospy.Time(0),
+                #         rospy.Duration(0.1),
+                #     )
+                # except (
+                #     tf2_ros.LookupException,
+                #     tf2_ros.ConnectivityException,
+                #     tf2_ros.ExtrapolationException,
+                # ) as e:
+                #     print(e)
+                #     continue
+
+                # end_eff_tensor = torch.Tensor(
+                #     [
+                #         # trans.transform.translation.x - 0.09,
+                #         # trans.transform.translation.y - 0.05,
+                #         # trans.transform.translation.z - 0.06,
+                #         (
+                #             gripper_finger_left.transform.translation.x
+                #             + gripper_finger_right.transform.translation.x
+                #         )
+                #         / 2,
+                #         (
+                #             gripper_finger_left.transform.translation.y
+                #             + gripper_finger_right.transform.translation.y
+                #         )
+                #         / 2,
+                #         gripper_finger_left.transform.translation.z,
+                #     ]
+                # )
 
                 local_goal_pos = deepcopy(torch.tensor(self.goal_point))
 
@@ -981,12 +1019,13 @@ class HalSkillsNode(hm.HelloNode):
                 point.point.x = local_goal_pos[0]
                 point.point.y = local_goal_pos[1]
                 point.point.z = local_goal_pos[2]
+                # goal_in_base = point
                 goal_in_base = self.listener_tf.transformPoint("base_link", point)
 
                 local_goal_pos = torch.tensor(
                     [
                         goal_in_base.point.x,
-                        goal_in_base.point.y - 0.05,
+                        goal_in_base.point.y - 0.04,
                         goal_in_base.point.z,
                     ]
                 )
@@ -994,8 +1033,8 @@ class HalSkillsNode(hm.HelloNode):
                 local_goal_pos[0] = -local_goal_pos[0]  # 0.03
                 local_goal_pos[1] = -(local_goal_pos[1])  # 0.135
 
-                end_eff_tensor[0] = -(end_eff_tensor[0])
-                end_eff_tensor[1] = -(end_eff_tensor[1])
+                # end_eff_tensor[0] = -(end_eff_tensor[0])
+                # end_eff_tensor[1] = -(end_eff_tensor[1])
 
                 point = PointStamped()
                 point.header.frame_id = "base_link"
@@ -1013,7 +1052,6 @@ class HalSkillsNode(hm.HelloNode):
                 self.curr_ee_ps_publisher.publish(point)
                 print(f"Curr: {end_eff_tensor=}")
 
-
                 # print(f"goal tensor:  {local_goal_pos}")
                 # print(f"Current EE pos: {end_eff_tensor}")
 
@@ -1025,17 +1063,48 @@ class HalSkillsNode(hm.HelloNode):
                 # print(f"{point=}")
                 # print()
                 # continue
+                inp = torch.zeros(4, dtype=torch.float32)
+                delta = local_goal_pos - end_eff_tensor
+                # delta[0] = -delta[0]
+                # delta[1] = -delta[1]
+                inp[:3] = delta
+                # inp = delta
+                inp[3] = self.odometry[2]
+                inp = inp.to(torch.float32)
 
-                in_z = np.abs(local_goal_pos[2] - end_eff_tensor[2]) < 0.024
-                # in_y = np.abs(goal_pred[1] - end_eff_tensor[1]) < 0.025
+                if delta[0] > 0.03 and x_state is None:
+                    x_state = 1
+                elif delta[0] < -0.03 and x_state is None:
+                    x_state = -1
+                elif np.abs(delta[0]) <= 0.03 and x_state is None:
+                    x_state = 0
+
+                in_z = np.abs(local_goal_pos[2] - end_eff_tensor[2]) < 0.03
+                # in_y = np.abs(local_goal_pos[1] - end_eff_tensor[1]) < 0.025
                 deep_y = (end_eff_tensor[1] - local_goal_pos[1] >= 0.001) and (
                     end_eff_tensor[1] - local_goal_pos[1]
                 ) <= 0.024
                 in_y = (
-                    np.abs(end_eff_tensor[1] - local_goal_pos[1]) < 0.0001
+                    np.abs(end_eff_tensor[1] - local_goal_pos[1]) < 0.001
                 ) or deep_y  # 0.01
+
+                # deep_x = False
+                # if x_state == 1:
+                #     print("x_state: 1")
+                #     deep_x = (end_eff_tensor[0] - local_goal_pos[0] >= 0.001) and (
+                #         end_eff_tensor[0] - local_goal_pos[0]
+                #     ) <= 0.015
+                # elif x_state == -1:
+                #     print("x_state: -1")
+                #     deep_x = (local_goal_pos[0] - end_eff_tensor[0] >= 0.001) and (
+                #         local_goal_pos[0] - end_eff_tensor[0]
+                #     ) <= 0.015
+                # else:
+                #     print("x_state: 0")
+                #     deep_x = np.abs(local_goal_pos[0] - end_eff_tensor[0]) < 0.015
+                # in_x = deep_x
                 in_x = np.abs(local_goal_pos[0] - end_eff_tensor[0]) < 0.015  # 0.012
-                full_extend = self.joint_states.position[wrist_idx] > 0.41
+                full_extend = self.joint_states.position[wrist_idx] > 0.35
 
                 joint_eff = self.joint_states.effort
                 wrist_yaw_eff_idx = self.joint_states.name.index("joint_wrist_roll")
@@ -1054,19 +1123,16 @@ class HalSkillsNode(hm.HelloNode):
                     self.lift_arm_primitive()
                     break
 
-                # inp = torch.zeros(4, dtype=torch.float32)
-                delta = local_goal_pos - end_eff_tensor
-                # delta[0] = -delta[0]
-                # delta[1] = -delta[1]
-                # inp[:3] = delta
-                inp = delta
-                # inp[3] = self.odometry[2]
-                inp = inp.to(torch.float32)
-
                 start = time.time()
                 print(f"Input to model {inp}")
                 prediction = self.model(inp)
                 keypressed_index = torch.argmax(prediction).item()
+                # if in_z and (
+                #     keypressed_index == 4
+                #     or keypressed_index == 5
+                #     or keypressed_index == 1
+                # ):
+                #     keypressed_index = 0
 
                 print(f"ppo: {time.time() - start}")
                 times.append(time.time() - start)
@@ -1088,7 +1154,6 @@ class HalSkillsNode(hm.HelloNode):
                 #     print("GOAL IS FIXED")
                 # else:
                 #     fixed_goal = deepcopy(torch.tensor(self.goal_point))
-
 
                 if keypressed == "_":
                     # noop
@@ -1113,31 +1178,29 @@ class HalSkillsNode(hm.HelloNode):
         # pick_prompt_msg.pick_prompt = None
         # pick_prompt_msg.do_pick = False
 
-    def move_shelf_primitive(self): 
-        command = '9'
+    def move_shelf_primitive(self):
+        command = "9"
         rate = rospy.Rate(self.rate)
-        for i in range(44): 
-            command = self.get_command('9')
-            self.send_command(command)
-
-            rate.sleep()
-            rate.sleep()
-        
-        for i in range(200): 
-            # print(f'{i=}') 
-            command = self.get_command('6')
-            self.send_command(command)
-            rate.sleep()
-            rate.sleep()
-
-        for i in range(44): 
-            command = self.get_command('9')
+        for i in range(44):
+            command = self.get_command("9")
             self.send_command(command)
 
             rate.sleep()
             rate.sleep()
 
-        
+        for i in range(200):
+            # print(f'{i=}')
+            command = self.get_command("6")
+            self.send_command(command)
+            rate.sleep()
+            rate.sleep()
+
+        for i in range(44):
+            command = self.get_command("9")
+            self.send_command(command)
+
+            rate.sleep()
+            rate.sleep()
 
 
 def get_args():
@@ -1152,7 +1215,5 @@ if __name__ == "__main__":
     # goal_pos = args.goal_pos.split(",")
     node = HalSkillsNode()
     # node.start()
-    # node.main()
-    node.move_shelf_primitive()
-
-
+    node.main()
+    # node.move_shelf_primitive()
