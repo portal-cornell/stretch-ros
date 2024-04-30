@@ -1,5 +1,5 @@
 #!/bin/bash
-source $HOME/catkin_ws/devel/setup.bash
+source $HOME/new_ws/devel/setup.bash
 
 echo "Attempt to update the calibration files using the most recently performed calibration."
 

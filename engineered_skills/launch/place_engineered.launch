@@ -1,0 +1,11 @@
+<launch>
+
+    <arg name="debug_directory" value="$(env HELLO_FLEET_PATH)/debug/"/>
+
+	<!-- PLACE() SKILL -->
+  	<node name="place_node" pkg="engineered_skills" type="place_object.py" output="screen" args=''/>
+  	<!-- -->
+
+
+
+</launch>

@@ -2,6 +2,7 @@
   
   <param name="robot_description" textfile="$(find stretch_description)/urdf/stretch.urdf" />
   <arg name="calibrated_controller_yaml_file" value="$(find stretch_core)/config/controller_calibration_head.yaml"/>
+  <!-- <arg name="calibrated_controller_yaml_file" value="$(find stretch_core)/config/controller_calibration_head_factory_default.yaml"/> -->
 
   <node
       name="joint_state_publisher"

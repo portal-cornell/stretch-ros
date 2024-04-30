@@ -1,0 +1,2 @@
+bool do_pick
+string pick_prompt
