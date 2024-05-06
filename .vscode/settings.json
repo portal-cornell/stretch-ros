@@ -1,0 +1,12 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/strech/new_ws/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages",
+        "/home/strech/new_ws/src/stretch_ros/stretch_learning/nodes/ppo_env"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/strech/new_ws/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages",
+        "/home/strech/new_ws/src/stretch_ros/stretch_learning/nodes/ppo_env"
+    ]
+}

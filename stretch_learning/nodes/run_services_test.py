@@ -2,11 +2,12 @@
 
 import rospy
 
-from hal_main_grocerybot import Hal
+from hal_main_test import Hal
 from stretch_learning.srv import (
     HalMove,
     HalPick,
     HalPlace,
+    HalHandover,
     HalMoveResponse,
     HalPickResponse,
     HalPlaceResponse,
@@ -33,6 +34,7 @@ class TaskServer:
         s_move = rospy.Service("HalMove", HalMove, self.handle_move)
         s_place = rospy.Service("HalPlace", HalPlace, self.handle_place)
         s_pick = rospy.Service("HalPick", HalPick, self.handle_pick)
+        s_handover = rospy.Service("HalHandover", HalHandover, self.handle_handover)
 
         rospy.spin()
 
@@ -54,22 +56,16 @@ class TaskServer:
         print("Place callback called")
         if self.action_status == NOT_STARTED:
             self.action_status = RUNNING
-            if hasattr(req, "x") and hasattr(req, "y") and hasattr(req, "z"):
-                self.hal.place_goal([req.x, req.y, req.z])
-            else:
-                self.hal.place_goal(req)
+            self.hal.place_goal(req)
             self.action_status = NOT_STARTED
             return HalPlaceResponse(SUCCESS)
         return HalPlaceResponse(self.action_status)
 
-    def handle_pick(self, req):
+    def handle_pick(self):
         print("Pick callback called")
         if self.action_status == NOT_STARTED:
             self.action_status = RUNNING
-            if hasattr(req, "object"):
-                self.hal.pick_goal(prompt=req.object.lower())
-            else:
-                self.hal.pick_goal(prompt=req.lower())
+            self.hal.pick_goal()
             self.action_status = NOT_STARTED
             return HalPickResponse(SUCCESS)
         return HalPickResponse(self.action_status)
@@ -80,9 +76,5 @@ class TaskServer:
 
 if __name__ == "__main__":
     ts = TaskServer()
-    # ts.start()
-    ts.handle_pick("ketchup")
-    ts.handle_move("fridge")
-    ts.handle_place(["0.36", "-0.06", "-0.06"])
     ts.handle_move("table")
     

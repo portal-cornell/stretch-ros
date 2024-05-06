@@ -927,7 +927,6 @@ class HalSkillsNode(hm.HelloNode):
                 # and self.odometry is not None
                 and self.goal_point is not None
             ):
-
                 step += 1
 
                 if fixed_goal is not None and step > 4:

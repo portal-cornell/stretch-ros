@@ -910,11 +910,18 @@ class HalSkillsPlace(hm.HelloNode):
             # print(self.odo)
             print(self.joint_states_data)
             print("GOAL POINT = ", self.goal_point)
+
+            checked_goal_point = False
             if (
                 self.joint_states_data is not None
                 # and self.odometry is not None
                 and self.goal_point is not None
             ):
+                
+                if not checked_goal_point:
+                    input("Verified Goal Point?")
+                    checked_goal_point = True
+
 
                 step += 1
 

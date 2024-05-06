@@ -1,5 +1,7 @@
 #request constants
-string location
+string x
+string y
+string z
 ---
 #response constants
 int8 status

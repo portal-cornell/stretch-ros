@@ -1,6 +1,6 @@
 <launch>
   <arg name="map_yaml"                doc="filepath to previously captured map (required)" />
-  <arg name="rviz"     default="false" doc="whether to show Rviz" />
+  <arg name="rviz"     default="true" doc="whether to show Rviz" />
   <arg name="skill_name"  default="pick_pantry" />
   <arg name="model_type"  default="visuomotor_bc" />
   <arg name="train_type"  default="end-eff-img" />
@@ -28,6 +28,12 @@
   <!-- -->
   <!-- MAP SERVER -->
   <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_yaml)" />
+
+  <node name="imu_filter_madgwick" pkg="imu_filter_madgwick" type="imu_filter_node" output="screen" respawn="false">
+    <param name="use_mag" value="true" />
+    <remap from="imu/data_raw" to="imu_mobile_base" />
+    <remap from="imu/mag" to="magnetometer_mobile_base" />
+  </node>
   <!-- LOCALIZATION
   <param name="/amcl/initial_pose_x" type="double" value="0"/>
   <param name="/amcl/initial_pose_y" type="double" value="0"/>
@@ -36,6 +42,11 @@
   <include file="$(find stretch_core)/launch/stretch_ekf.launch"></include>
   <!-- LOCALIZATION -->
   <node pkg="amcl" type="amcl" name="amcl" output="screen">
+    <!-- <param name="/amcl/initial_pose_x" type="double" value="1.3438"/>
+    <param name="/amcl/initial_pose_y" type="double" value="-0.1"/>
+    <param name="/amcl/initial_pose_a" type="double" value="1.57"/>
+     -->
+
     <param name="/amcl/initial_pose_x" type="double" value="0"/>
     <param name="/amcl/initial_pose_y" type="double" value="0"/>
     <param name="/amcl/initial_pose_a" type="double" value="0"/>

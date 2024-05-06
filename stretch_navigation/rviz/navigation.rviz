@@ -447,7 +447,7 @@ Visualization Manager:
       Radius: 0.009999999776482582
       Shaft Diameter: 0.03999999910593033
       Shaft Length: 0.10000000149011612
-      Topic: /move_base/TrajectoryPlannerROS/global_plan
+      Topic: /move_base/DWAPlannerROS/global_plan
       Unreliable: false
       Value: true
     - Class: octomap_rviz_plugin/OccupancyGrid

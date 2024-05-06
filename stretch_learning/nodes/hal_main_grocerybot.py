@@ -7,7 +7,8 @@ import torch
 import actionlib
 import tf2_ros
 import time
-from geometry_msgs.msg import Twist
+import numpy as np
+from geometry_msgs.msg import Twist, Pose2D
 
 # place
 from hal_skills_aruco import HalSkillsPlace
@@ -60,6 +61,22 @@ class Hal(hm.HelloNode):
         self.rate = 10.0
 
         self.action_status = NOT_STARTED
+
+        self.curr_pose = None
+        self.linear_gain = 0.8
+        self.angular_gain = 0.8
+        self.dist_threshold = 0.02
+        self.ang_threshold = 0.02
+        self.max_linear_velocity = 0.1
+        self.max_angular_velocity = 0.1
+        self.turn_in_place_gain = 0.3
+
+        self.curr_pose_sub = rospy.Subscriber(
+            "/pose2D",
+            Pose2D,
+            self.curr_pose_callback,
+        )
+
 
     def move_x(self, speed):
         """
@@ -129,11 +146,119 @@ class Hal(hm.HelloNode):
             self.move_x(speed)
         self.move_x(0)
     
-    def pick_goal(self):
+    def curr_pose_callback(self, msg):
+        self.curr_pose = [msg.x, msg.y, msg.theta]
+    
+    def at_xy_goal(self, curr, goal):
+        if np.linalg.norm([curr[0] - goal[0], curr[1] - goal[1]]) < self.dist_threshold:
+            return True
+        else:
+            return False
+    
+    def at_angle_goal(self, curr, goal):
+        if np.abs(curr[2] - goal[2]) < self.ang_threshold:
+            return True
+        else:
+            return False
+    
+    def reset_velocity(self):
+        """
+        Function that publishes Twist messages
+        :param self: The self reference.
+
+        :publishes command: Twist message.
+        """
+        command = Twist()
+        command.linear.x = 0.0
+        command.linear.y = 0.0
+        command.linear.z = 0.0
+        command.angular.x = 0.0
+        command.angular.y = 0.0
+        command.angular.z = 0.0
+        self.pub.publish(command)
+    
+    def move_velocity(self, linear_x, angular_z):
+        """
+        Function that publishes Twist messages
+        :param self: The self reference.
+
+        :publishes command: Twist message.
+        """
+        command = Twist()
+        command.linear.x = linear_x
+        command.linear.y = 0.0
+        command.linear.z = 0.0
+        command.angular.x = 0.0
+        command.angular.y = 0.0
+        command.angular.z = angular_z
+        self.pub.publish(command)
+
+    def pid_move(self, goal):
+        """2 Stage approach
+        Stage 1 - Approach the goal ASAP
+        Stage 2 - Rotate the base to match the angle defined in the goal positon 
+        
+        Parameter:
+            goal (list): [x, y, theta]
+        """
+        self.initial_arm_move()
+        s = rospy.ServiceProxy("/switch_to_navigation_mode", Trigger)
+        resp = s()
+        print(resp)
+        print("Go to goal")
+
+        #  Stage 1
+        while not rospy.is_shutdown() and not self.at_xy_goal(self.curr_pose, goal):
+            if self.curr_pose is not None:
+                diff_vector = [goal[0] - self.curr_pose[0], goal[1] - self.curr_pose[1]]
+                print(f"{self.curr_pose=}")
+                print(f"{diff_vector=}")
+                angle_to_goal = np.arctan2(diff_vector[1], diff_vector[0])
+                print(f"{angle_to_goal=}")
+                distance_error = np.linalg.norm(diff_vector)
+                angle_error = angle_to_goal - self.curr_pose[2] # Difference between orientation and the angle btw the robot and the goal
+                print(f"{angle_error=}")
+
+                linear_velocity = np.clip(self.linear_gain * distance_error * np.cos(angle_error), 
+                                          a_min=-self.max_linear_velocity, a_max=self.max_linear_velocity)
+                angular_velocity = np.clip(self.angular_gain * np.abs(angle_error) * (np.sign(linear_velocity) if linear_velocity > 0.005 else 1) * np.sin(angle_error), 
+                                            a_min=-self.max_angular_velocity, a_max=self.max_angular_velocity)
+
+                print(f"{linear_velocity=}")
+                print(f"{angular_velocity=}")
+                self.move_velocity(linear_velocity, angular_velocity)
+
+                print("-" * 20)
+
+                rospy.sleep(1)
+                self.reset_velocity()
+            else:
+                print("Retrieving current pose")
+
+        print("Turn in place")
+        # Stage 2
+        while not rospy.is_shutdown() and not self.at_angle_goal(self.curr_pose, goal):
+            angle_error = goal[2] - self.curr_pose[2] # Difference between orientation and the angle btw the robot and the goal
+
+            if np.abs(goal[2]) > np.pi / 2 and np.abs(self.curr_pose[2]) > np.pi / 2 and np.sign(goal[2]) != np.sign(self.curr_pose):
+                angle_error = (-1 * np.sign(angle_error) * 360) + angle_error
+
+            angular_velocity = np.clip(self.turn_in_place_gain * angle_error, a_min=-self.max_angular_velocity, a_max=self.max_angular_velocity)
+
+            print(f"{self.curr_pose=}")
+            print(f"{angle_error=}")
+            print(f"{angular_velocity=}")
+            self.move_velocity(0.0, angular_velocity)
+
+            rospy.sleep(1)
+            self.reset_velocity()
+
+    
+    def pick_goal(self, prompt):
         """
         reset parameter defaults to False: when False, Hal will reset its arm and execute policy assuming it's already in reset position
         """
-        self.hal_skills_pick.main()
+        self.hal_skills_pick.main(prompt=prompt)
         self.retract_arm_primitive()
     
     def place_goal(self, place_loc):
@@ -176,4 +301,7 @@ class Hal(hm.HelloNode):
 
 if __name__ == "__main__":
     hal = Hal()
+
+    # hal.pid_move(goal=[-0.7, 0.0, 0.1])
+    hal.pid_move(goal=[0.0, 0.0, -0.2])
     
